@@ -4,6 +4,14 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import {
+  IconArrowRight,
+  IconBarChart,
+  IconClock,
+  IconFileText,
+  IconProfile,
+  IconUsers,
+} from "@/components/SvgIcons";
 import "../landing.css"; // Reuse landing page glowing and hero styles
 
 interface Stats {
@@ -19,7 +27,6 @@ const PORTALS = [
   {
     title: "Phases & Days",
     description: "Manage phases, days, sessions, tasks, and tests. Full control over the program structure.",
-    icon: "⚙️",
     href: "/admin/phases",
     color: "var(--accent-tertiary)",
     badge: "Program",
@@ -27,7 +34,6 @@ const PORTALS = [
   {
     title: "Students",
     description: "View registered students, verify payments, approve or reject registrations.",
-    icon: "🎓",
     href: "/admin/students",
     color: "var(--accent-primary)",
     badge: "Management",
@@ -35,7 +41,6 @@ const PORTALS = [
   {
     title: "Organisers",
     description: "Create and manage organiser/speaker accounts. Assign them to specific sessions.",
-    icon: "🎤",
     href: "/admin/organisers",
     color: "var(--accent-purple)",
     badge: "Team",
@@ -43,7 +48,6 @@ const PORTALS = [
   {
     title: "Evaluators",
     description: "Create evaluator accounts and assign specific student groups for monitoring.",
-    icon: "📊",
     href: "/admin/evaluators",
     color: "var(--accent-blue)",
     badge: "Volunteers",
@@ -126,35 +130,35 @@ export default function AdminDashboard() {
       <div className="stats-grid stagger-children" style={{ position: "relative", zIndex: 1 }}>
         <div className="stat-card card-glass animate-reveal" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <div className="stat-card-label" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-            <span style={{ fontSize: '1.2rem' }}>👥</span> Total Students
+            <IconUsers size={18} /> Total Students
           </div>
           <div className="stat-card-value accent-yellow" style={{ marginTop: 'auto', paddingTop: 'var(--space-4)' }}>{stats.totalStudents}</div>
           <div className="stat-card-sub">{stats.approvedStudents} approved</div>
         </div>
         <div className="stat-card card-glass animate-reveal" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <div className="stat-card-label" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-            <span style={{ fontSize: '1.2rem' }}>⏳</span> Pending Approvals
+            <IconClock size={18} /> Pending Approvals
           </div>
           <div className="stat-card-value accent-orange" style={{ marginTop: 'auto', paddingTop: 'var(--space-4)' }}>{stats.pendingApprovals}</div>
           <div className="stat-card-sub">awaiting verification</div>
         </div>
         <div className="stat-card card-glass animate-reveal" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <div className="stat-card-label" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-            <span style={{ fontSize: '1.2rem' }}>📋</span> Active Phases
+            <IconFileText size={18} /> Active Phases
           </div>
           <div className="stat-card-value accent-green" style={{ marginTop: 'auto', paddingTop: 'var(--space-4)' }}>{stats.activePhases}</div>
           <div className="stat-card-sub">of 5</div>
         </div>
         <div className="stat-card card-glass animate-reveal" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <div className="stat-card-label" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-            <span style={{ fontSize: '1.2rem' }}>🎤</span> Organisers
+            <IconUsers size={18} /> Organisers
           </div>
           <div className="stat-card-value accent-purple" style={{ marginTop: 'auto', paddingTop: 'var(--space-4)' }}>{stats.organisers}</div>
           <div className="stat-card-sub">assigned</div>
         </div>
         <div className="stat-card card-glass animate-reveal" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <div className="stat-card-label" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-            <span style={{ fontSize: '1.2rem' }}>📊</span> Evaluators
+            <IconBarChart size={18} /> Volunteers
           </div>
           <div className="stat-card-value accent-blue" style={{ marginTop: 'auto', paddingTop: 'var(--space-4)' }}>{stats.evaluators}</div>
           <div className="stat-card-sub">volunteers</div>
@@ -236,7 +240,7 @@ export default function AdminDashboard() {
                 fontSize: "24px",
                 border: "1px solid var(--border-subtle)"
               }}>
-                {portal.icon}
+                <PortalIcon href={portal.href} />
               </div>
               <span className="badge" style={{ 
                 background: `color-mix(in srgb, ${portal.color} 15%, transparent)`,
@@ -276,7 +280,7 @@ export default function AdminDashboard() {
               textTransform: "uppercase",
               letterSpacing: "0.05em"
             }}>
-              Manage <span style={{ transition: "transform 0.2s ease-out" }} className="arrow-icon">→</span>
+              Manage <span style={{ transition: "transform 0.2s ease-out", display: "inline-flex" }} className="arrow-icon"><IconArrowRight size={14} /></span>
             </div>
           </Link>
         ))}
@@ -288,4 +292,11 @@ export default function AdminDashboard() {
       `}} />
     </div>
   );
+}
+
+function PortalIcon({ href }: { href: string }) {
+  if (href.includes("students")) return <IconProfile size={24} />;
+  if (href.includes("organisers")) return <IconUsers size={24} />;
+  if (href.includes("evaluators")) return <IconBarChart size={24} />;
+  return <IconFileText size={24} />;
 }

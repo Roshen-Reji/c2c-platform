@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { appendToSheet } from "@/lib/google-sheets";
+import { appendSheetRecord } from "@/lib/google-sheets";
 
 export async function POST(req: Request) {
   try {
@@ -13,8 +13,11 @@ export async function POST(req: Request) {
       );
     }
 
-    // Append to Google Sheets: Email, Timestamp, Status
-    await appendToSheet([email, new Date().toISOString(), "Notification"]);
+    await appendSheetRecord("preRegistrations", [
+      email.toLowerCase().trim(),
+      new Date().toISOString(),
+      "Notification requested",
+    ]);
 
     return NextResponse.json({ success: true, message: "Notification requested successfully" });
   } catch (error: any) {

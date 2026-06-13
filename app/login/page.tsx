@@ -118,7 +118,7 @@ export default function LoginPage() {
               Welcome <span className="accent-yellow">Back</span>
             </h1>
             <p className="login-subtitle">
-              Sign in to your C2C student portal
+              Sign in to the C2C Portal
             </p>
           </div>
 
@@ -198,12 +198,6 @@ export default function LoginPage() {
           </form>
 
           <div className="login-footer">
-            <p className="login-footer-text">
-              Don&apos;t have an account?{" "}
-              <Link href="/register" className="accent-primary" id="login-register-link">
-                Register here
-              </Link>
-            </p>
           </div>
         </div>
       </div>

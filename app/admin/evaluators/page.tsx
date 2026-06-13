@@ -1,285 +1,182 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { collection, getDocs, query, orderBy } from "firebase/firestore";
+import { useEffect, useMemo, useState } from "react";
+import { collection, getDocs, orderBy, query } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { authenticatedJson } from "@/lib/api-client";
+import type { InterviewSlot, ProgramDay } from "@/lib/program-types";
+import {
+  IconCalendar,
+  IconCheckCircle,
+  IconClose,
+  IconClock,
+  IconPlus,
+  IconUsers,
+} from "@/components/SvgIcons";
 
-interface Evaluator {
+interface Volunteer {
   id: string;
   name: string;
   email: string;
   assignedStudents: string[];
 }
 
-export default function AdminEvaluatorsPage() {
-  const [evaluators, setEvaluators] = useState<Evaluator[]>([]);
-  const [showCreate, setShowCreate] = useState(false);
+interface Student {
+  id: string;
+  name: string;
+  email: string;
+}
+
+export default function AdminVolunteersPage() {
+  const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [interviewDays, setInterviewDays] = useState<ProgramDay[]>([]);
+  const [slots, setSlots] = useState<InterviewSlot[]>([]);
+  const [modal, setModal] = useState<"create" | "assign" | null>(null);
+  const [selectedVolunteer, setSelectedVolunteer] = useState<Volunteer | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [message, setMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
-  const [selectedEvaluator, setSelectedEvaluator] = useState<Evaluator | null>(null);
-  const [activeTab, setActiveTab] = useState("details");
+  const [studentId, setStudentId] = useState("");
+  const [dayReference, setDayReference] = useState("");
+  const [startsAt, setStartsAt] = useState("");
+  const [endsAt, setEndsAt] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const studentNames = useMemo(
+    () => new Map(students.map((student) => [student.id, student.name])),
+    [students],
+  );
 
   useEffect(() => {
     async function load() {
-      try {
-        const q = query(collection(db, "evaluators"), orderBy("createdAt", "desc"));
-        const snapshot = await getDocs(q);
-        if (snapshot.empty) return;
-        setEvaluators(
-          snapshot.docs.map((d) => {
-            const data = d.data();
-            return {
-              id: d.id,
-              name: data.fullName || data.name,
-              email: data.email,
-              assignedStudents: data.assignedStudents || [],
-            };
-          })
-        );
-      } catch {
-        // Demo mode
+      const [volunteerSnapshot, studentSnapshot, phaseSnapshot, slotResult] = await Promise.all([
+        getDocs(query(collection(db, "evaluators"), orderBy("createdAt", "desc"))),
+        getDocs(query(collection(db, "students"), orderBy("fullName"))),
+        getDocs(query(collection(db, "phases"), orderBy("order"))),
+        authenticatedJson<{ slots: InterviewSlot[] }>("/api/interviews"),
+      ]);
+      setVolunteers(volunteerSnapshot.docs.map((item) => ({
+        id: item.id,
+        name: item.data().fullName || item.data().name || "",
+        email: item.data().email || "",
+        assignedStudents: item.data().assignedStudents || [],
+      })));
+      setStudents(studentSnapshot.docs.filter((item) => (item.data().role || "student") === "student").map((item) => ({
+        id: item.id,
+        name: item.data().fullName || "",
+        email: item.data().email || "",
+      })));
+      const days: ProgramDay[] = [];
+      for (const phase of phaseSnapshot.docs) {
+        const daySnapshot = await getDocs(query(collection(db, "phases", phase.id, "days"), orderBy("order")));
+        daySnapshot.docs.forEach((item) => {
+          const data = item.data() as Omit<ProgramDay, "id" | "phaseId">;
+          if (data.type === "interview") days.push({ id: item.id, phaseId: phase.id, ...data });
+        });
       }
+      setInterviewDays(days);
+      setSlots(slotResult.slots);
     }
-    load();
+    void load();
   }, []);
 
-  const handleCreate = async () => {
-    if (!name.trim() || !email.trim()) return;
-    setCreating(true);
-    setMessage(null);
+  function resetAssignment() {
+    setStudentId("");
+    setDayReference("");
+    setStartsAt("");
+    setEndsAt("");
+  }
 
+  async function createVolunteer() {
+    if (!name.trim() || !email.trim()) return;
+    setSaving(true);
     try {
-      const res = await fetch("/api/admin/create-user", {
+      const result = await authenticatedJson<{ userId: string; tempPassword: string }>("/api/admin/create-user", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), email: email.trim(), role: "evaluator" }),
+        body: JSON.stringify({ name, email, role: "evaluator" }),
       });
-      const data = await res.json();
-
-      if (!res.ok) {
-        setMessage({ text: data.error || "Failed to create evaluator", type: "error" });
-        return;
-      }
-
-      setEvaluators((prev) => [
-        { id: data.userId, name: name.trim(), email: email.trim(), assignedStudents: [] },
-        ...prev,
-      ]);
-
-      const tempMsg = data.tempPassword
-        ? `Evaluator created! Temp password: ${data.tempPassword}`
-        : "Evaluator created successfully!";
-      setMessage({ text: tempMsg, type: "success" });
+      setVolunteers((current) => [{ id: result.userId, name: name.trim(), email: email.trim(), assignedStudents: [] }, ...current]);
+      setMessage(`Volunteer created. Temporary password: ${result.tempPassword}`);
       setName("");
       setEmail("");
-      setShowCreate(false);
-    } catch {
-      setMessage({ text: "Network error. Please try again.", type: "error" });
+      setModal(null);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not create the volunteer.");
     } finally {
-      setCreating(false);
+      setSaving(false);
     }
-  };
+  }
+
+  async function assignStudent() {
+    if (!selectedVolunteer || !studentId) return;
+    const [phaseId, dayId] = dayReference.split("/");
+    setSaving(true);
+    try {
+      await authenticatedJson("/api/admin/assignments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "volunteer-student",
+          volunteerId: selectedVolunteer.id,
+          studentId,
+          phaseId: phaseId || undefined,
+          dayId: dayId || undefined,
+          startsAt: startsAt ? new Date(startsAt).toISOString() : undefined,
+          endsAt: endsAt ? new Date(endsAt).toISOString() : undefined,
+          timezone: "Asia/Kolkata",
+        }),
+      });
+      setVolunteers((current) => current.map((item) => item.id === selectedVolunteer.id ? { ...item, assignedStudents: Array.from(new Set([...item.assignedStudents, studentId])) } : item));
+      if (dayId && startsAt && endsAt) {
+        const day = interviewDays.find((item) => item.id === dayId);
+        const student = students.find((item) => item.id === studentId);
+        setSlots((current) => [...current.filter((slot) => !(slot.dayId === dayId && slot.studentId === studentId)), {
+          id: `${dayId}_${studentId}`,
+          phaseId,
+          dayId,
+          dayTitle: day?.title || "",
+          studentId,
+          studentName: student?.name || "",
+          volunteerId: selectedVolunteer.id,
+          volunteerName: selectedVolunteer.name,
+          startsAt: new Date(startsAt).toISOString(),
+          endsAt: new Date(endsAt).toISOString(),
+          timezone: "Asia/Kolkata",
+          roomName: "Created securely on the server",
+          status: "scheduled",
+        }]);
+      }
+      setMessage("Student assignment and interview slot saved.");
+      resetAssignment();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not save the assignment.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function selectInterviewDay(reference: string) {
+    setDayReference(reference);
+    const [, dayId] = reference.split("/");
+    const day = interviewDays.find((item) => item.id === dayId);
+    if (!day) return;
+    const start = new Date(day.startsAt);
+    const end = new Date(start.getTime() + (day.interviewConfig?.durationMinutes || 30) * 60_000);
+    const local = (date: Date) => new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+    setStartsAt(local(start));
+    setEndsAt(local(end));
+  }
 
   return (
     <div>
-      <div className="portal-header">
-        <div>
-          <h1 className="portal-page-title">
-            Evaluator <span className="accent-blue">Management</span>
-          </h1>
-          <p className="portal-page-subtitle">Manage volunteers who monitor and evaluate students</p>
-        </div>
-        <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
-          + Add Evaluator
-        </button>
-      </div>
-
-      {message && (
-        <div
-          style={{
-            padding: "var(--space-3) var(--space-5)",
-            borderRadius: "var(--radius-md)",
-            marginBottom: "var(--space-6)",
-            fontFamily: "var(--font-mono)",
-            fontSize: "var(--text-sm)",
-            background: message.type === "success" ? "rgba(71, 255, 167, 0.1)" : "rgba(255, 107, 71, 0.1)",
-            border: `1px solid ${message.type === "success" ? "rgba(71, 255, 167, 0.3)" : "rgba(255, 107, 71, 0.3)"}`,
-            color: message.type === "success" ? "var(--accent-secondary)" : "var(--accent-tertiary)",
-            wordBreak: "break-all",
-          }}
-        >
-          {message.text}
-        </div>
-      )}
-
-      <div className="stats-grid" style={{ marginBottom: "var(--space-6)" }}>
-        <div className="stat-card">
-          <div className="stat-card-label">📊 Total Evaluators</div>
-          <div className="stat-card-value accent-blue">{evaluators.length}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-card-label">👥 With Students</div>
-          <div className="stat-card-value accent-green">{evaluators.filter((e) => e.assignedStudents.length > 0).length}</div>
-        </div>
-      </div>
-
-      <div className="data-table-wrapper">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Assigned Students</th>
-              <th style={{ textAlign: "right" }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {evaluators.length === 0 ? (
-              <tr>
-                <td colSpan={4}>
-                  <div className="empty-state">
-                    <div className="empty-state-icon">📊</div>
-                    <div className="empty-state-title">No evaluators yet</div>
-                    <div className="empty-state-text">Click &quot;Add Evaluator&quot; to create volunteer accounts.</div>
-                  </div>
-                </td>
-              </tr>
-            ) : (
-              evaluators.map((e) => (
-                <tr key={e.id}>
-                  <td style={{ fontWeight: 500, color: "var(--text-primary)" }}>{e.name}</td>
-                  <td className="mono-text" style={{ fontSize: "var(--text-xs)" }}>{e.email}</td>
-                  <td>
-                    {e.assignedStudents.length > 0 ? (
-                      <span className="badge badge-green" style={{ fontSize: "10px" }}>{e.assignedStudents.length} students</span>
-                    ) : (
-                      <span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>None</span>
-                    )}
-                  </td>
-                  <td style={{ textAlign: "right" }}>
-                    <button className="btn btn-ghost" style={{ fontSize: "var(--text-xs)" }} onClick={() => setSelectedEvaluator(e)}>View Details</button>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {showCreate && (
-        <div className="modal-overlay" onClick={() => setShowCreate(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3 className="modal-title">Add Evaluator</h3>
-              <button className="modal-close" onClick={() => setShowCreate(false)}>✕</button>
-            </div>
-            <div className="input-group">
-              <label className="input-label">Full Name</label>
-              <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Enter evaluator name" />
-            </div>
-            <div className="input-group">
-              <label className="input-label">Email</label>
-              <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="evaluator@email.com" />
-            </div>
-            <p style={{ fontSize: "var(--text-xs)", color: "var(--text-tertiary)", marginBottom: "var(--space-4)" }}>
-              A Firebase Auth account will be created. A temporary password will be generated.
-            </p>
-            <div style={{ display: "flex", gap: "var(--space-3)" }}>
-              <button className="btn btn-primary" onClick={handleCreate} disabled={creating}>
-                {creating ? (
-                  <><span className="spinner" /> Creating...</>
-                ) : (
-                  "Create Evaluator"
-                )}
-              </button>
-              <button className="btn btn-ghost" onClick={() => setShowCreate(false)}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Side Panel for Evaluator Details */}
-      {selectedEvaluator && (
-        <>
-          <div className="side-panel-overlay" onClick={() => setSelectedEvaluator(null)} />
-          <div className="side-panel">
-            <div className="side-panel-header">
-              <h3 className="modal-title">Evaluator Details</h3>
-              <button className="side-panel-close" onClick={() => setSelectedEvaluator(null)}>✕</button>
-            </div>
-            <div className="roadmap-phase-tabs" style={{ marginBottom: 0, padding: "var(--space-4)", borderBottom: "1px solid var(--border-subtle)" }}>
-              <div 
-                className={`roadmap-phase-tab ${activeTab === 'details' ? 'active' : ''}`}
-                onClick={() => setActiveTab('details')}
-              >
-                Profile Info
-              </div>
-              <div 
-                className={`roadmap-phase-tab ${activeTab === 'assignments' ? 'active' : ''}`}
-                onClick={() => setActiveTab('assignments')}
-              >
-                Assigned Students
-              </div>
-            </div>
-            <div className="side-panel-body">
-              {activeTab === 'details' && (
-                <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-4)" }}>
-                    <div className="sidebar-avatar" style={{ width: "64px", height: "64px", fontSize: "24px" }}>
-                      {selectedEvaluator.name.charAt(0).toUpperCase()}
-                    </div>
-                    <div>
-                      <h2 style={{ fontSize: "var(--text-2xl)", fontFamily: "var(--font-heading)", marginBottom: "var(--space-1)" }}>{selectedEvaluator.name}</h2>
-                      <div className="mono-text" style={{ color: "var(--text-secondary)" }}>{selectedEvaluator.email}</div>
-                    </div>
-                  </div>
-                  
-                  <div className="card">
-                    <h4 style={{ fontFamily: "var(--font-heading)", color: "var(--text-secondary)", marginBottom: "var(--space-4)" }}>Account Status</h4>
-                    <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
-                      <span className="badge badge-green">Active</span>
-                      <span className="mono-text" style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>ID: {selectedEvaluator.id}</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-              
-              {activeTab === 'assignments' && (
-                <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <h3 style={{ fontFamily: "var(--font-heading)" }}>Assigned Students</h3>
-                    <button className="btn btn-secondary" style={{ padding: "var(--space-2) var(--space-4)", fontSize: "var(--text-xs)" }}>
-                      + Assign Student
-                    </button>
-                  </div>
-                  
-                  {selectedEvaluator.assignedStudents.length === 0 ? (
-                    <div className="card" style={{ textAlign: "center", padding: "var(--space-8)" }}>
-                      <div style={{ fontSize: "32px", marginBottom: "var(--space-4)" }}>🎓</div>
-                      <h4 style={{ marginBottom: "var(--space-2)" }}>No assignments yet</h4>
-                      <p style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)" }}>This evaluator hasn't been assigned to any students.</p>
-                    </div>
-                  ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-                      {selectedEvaluator.assignedStudents.map(studentId => (
-                        <div key={studentId} className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "var(--space-4)" }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
-                            <span className="badge badge-blue">Student</span>
-                            <span className="mono-text" style={{ fontSize: "var(--text-xs)" }}>ID: {studentId}</span>
-                          </div>
-                          <button className="btn btn-ghost" style={{ color: "var(--accent-orange)" }}>Remove</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </>
-      )}
+      <div className="portal-header"><div><h1 className="portal-page-title">Volunteer <span className="accent-blue">Management</span></h1><p className="portal-page-subtitle">Assign each student a responsible volunteer and a precise interview slot.</p></div><button className="btn btn-primary" onClick={() => setModal("create")}><IconPlus size={14} /> Add Volunteer</button></div>
+      {message && <div className="portal-notice success"><IconCheckCircle size={15} /> {message}</div>}
+      <div className="stats-grid"><div className="stat-card"><div className="stat-card-label"><IconUsers size={15} /> Volunteers</div><div className="stat-card-value accent-blue">{volunteers.length}</div></div><div className="stat-card"><div className="stat-card-label"><IconUsers size={15} /> Assigned students</div><div className="stat-card-value accent-green">{new Set(volunteers.flatMap((item) => item.assignedStudents)).size}</div></div><div className="stat-card"><div className="stat-card-label"><IconCalendar size={15} /> Interview slots</div><div className="stat-card-value accent-purple">{slots.length}</div></div></div>
+      <div className="data-table-wrapper"><table className="data-table"><thead><tr><th>Volunteer</th><th>Email</th><th>Students</th><th>Scheduled slots</th><th /></tr></thead><tbody>{volunteers.map((volunteer) => <tr key={volunteer.id}><td>{volunteer.name}</td><td className="mono-text">{volunteer.email}</td><td>{volunteer.assignedStudents.length ? volunteer.assignedStudents.map((id) => studentNames.get(id) || id).join(", ") : "None"}</td><td><span className="badge badge-purple">{slots.filter((slot) => slot.volunteerId === volunteer.id).length}</span></td><td style={{ textAlign: "right" }}><button className="btn btn-secondary" onClick={() => { setSelectedVolunteer(volunteer); resetAssignment(); setModal("assign"); }}>Assign student</button></td></tr>)}</tbody></table></div>
+      {modal === "create" && <div className="modal-overlay" onClick={() => setModal(null)}><div className="modal" onClick={(event) => event.stopPropagation()}><div className="modal-header"><h2 className="modal-title">Create Volunteer</h2><button className="modal-close" onClick={() => setModal(null)}><IconClose size={16} /></button></div><div className="input-group"><label className="input-label">Full name</label><input className="input" value={name} onChange={(event) => setName(event.target.value)} /></div><div className="input-group"><label className="input-label">Email</label><input className="input" type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></div><div className="modal-actions"><button className="btn btn-primary" disabled={saving} onClick={createVolunteer}>{saving ? "Creating..." : "Create Volunteer"}</button></div></div></div>}
+      {modal === "assign" && selectedVolunteer && <div className="modal-overlay" onClick={() => setModal(null)}><div className="modal modal-wide" onClick={(event) => event.stopPropagation()}><div className="modal-header"><div><h2 className="modal-title">Assign to {selectedVolunteer.name}</h2><p className="modal-subtitle">The interview schedule is optional; student responsibility is always saved.</p></div><button className="modal-close" onClick={() => setModal(null)}><IconClose size={16} /></button></div><div className="form-grid"><div className="input-group"><label className="input-label">Student</label><select className="input select" value={studentId} onChange={(event) => setStudentId(event.target.value)}><option value="">Select student</option>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.email}</option>)}</select></div><div className="input-group"><label className="input-label">Interview day</label><select className="input select" value={dayReference} onChange={(event) => selectInterviewDay(event.target.value)}><option value="">No interview yet</option>{interviewDays.map((day) => <option key={day.id} value={`${day.phaseId}/${day.id}`}>{day.title}</option>)}</select></div><div className="input-group"><label className="input-label">Student slot starts</label><input className="input" type="datetime-local" value={startsAt} disabled={!dayReference} onChange={(event) => setStartsAt(event.target.value)} /></div><div className="input-group"><label className="input-label">Student slot ends</label><input className="input" type="datetime-local" value={endsAt} disabled={!dayReference} onChange={(event) => setEndsAt(event.target.value)} /></div></div><div className="portal-notice success"><IconClock size={15} /> The same slot and Jitsi room will appear in both the student and volunteer portals.</div><div className="modal-actions"><button className="btn btn-primary" disabled={saving || !studentId || (!!dayReference && (!startsAt || !endsAt))} onClick={assignStudent}>{saving ? "Saving..." : "Save Assignment"}</button></div></div></div>}
     </div>
   );
 }

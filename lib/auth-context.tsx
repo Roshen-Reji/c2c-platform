@@ -24,6 +24,8 @@ export interface UserProfile {
   testsTaken?: number;
   daysCompleted?: number;
   assignedStudents?: string[];
+  assignedDayIds?: string[];
+  volunteerId?: string;
 }
 
 interface AuthContextType {
@@ -86,6 +88,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 testsTaken: data.testsTaken,
                 daysCompleted: data.daysCompleted,
                 assignedStudents: data.assignedStudents,
+                assignedDayIds: data.assignedDayIds || data.assignedDays,
+                volunteerId: data.volunteerId,
               });
               break;
             }

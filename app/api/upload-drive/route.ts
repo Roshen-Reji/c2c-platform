@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { authErrorResponse, requireUser } from "@/lib/server-auth";
 
 export async function POST(request: NextRequest) {
   try {
+    const user = await requireUser(request, ["student", "admin", "organiser", "evaluator"]);
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
     const userEmail = formData.get("userEmail") as string | null;
@@ -12,6 +14,12 @@ export async function POST(request: NextRequest) {
         { error: "Missing required fields (file, userEmail, dayId)" },
         { status: 400 }
       );
+    }
+    if (user.role === "student" && user.email.toLowerCase() !== userEmail.toLowerCase().trim()) {
+      return NextResponse.json({ error: "You can only upload files to your own account." }, { status: 403 });
+    }
+    if (file.size > 250 * 1024 * 1024) {
+      return NextResponse.json({ error: "Files must be smaller than 250 MB." }, { status: 413 });
     }
 
     const { findOrCreateFolder, uploadFileToDrive } = await import("@/lib/google-drive");
@@ -33,6 +41,8 @@ export async function POST(request: NextRequest) {
       contentUrl: driveFile.webContentLink,
     });
   } catch (err) {
+    const authResponse = authErrorResponse(err);
+    if (authResponse) return authResponse;
     console.error("Error uploading to Google Drive:", err);
     return NextResponse.json(
       { error: "Failed to upload file to Google Drive. Credentials may be missing." },

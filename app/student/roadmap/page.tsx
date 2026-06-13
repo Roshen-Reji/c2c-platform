@@ -5,9 +5,11 @@ import Link from "next/link";
 import { collection, getDocs, orderBy, query } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useScrollCache } from "@/lib/useScrollCache";
+import { getDayAccessState, type DayType } from "@/lib/program-types";
 import {
   IconClose,
   IconArrowRight,
+  IconRoadmap,
   DayTypeIcon,
 } from "@/components/SvgIcons";
 
@@ -22,9 +24,14 @@ interface Phase {
 interface Day {
   id: string;
   title: string;
-  type: "learning" | "task" | "test";
+  phaseId?: string;
+  type: DayType;
   order: number;
   description: string;
+  startsAt: string;
+  endsAt: string;
+  timezone: string;
+  published: boolean;
   status?: "completed" | "current" | "locked";
 }
 
@@ -195,7 +202,7 @@ export default function RoadmapPage() {
         </div>
       ) : phases.length === 0 ? (
         <div className="empty-state" style={{ marginTop: "var(--space-8)" }}>
-          <div className="empty-state-icon">🗺️</div>
+          <div className="empty-state-icon"><IconRoadmap size={38} /></div>
           <div className="empty-state-title">Roadmap not ready yet</div>
           <div className="empty-state-text">Your learning roadmap is currently being built by the organizers. Please check back later.</div>
         </div>
@@ -262,7 +269,10 @@ export default function RoadmapPage() {
             const yPos = 200;
             const cardLeft = xPos - 120;
             const cardTop = isTop ? yPos - 160 : yPos + 40;
-            const status = dayObj.status || "locked";
+            const access = getDayAccessState(dayObj);
+            const status =
+              dayObj.status ||
+              (access === "open" ? "current" : access === "closed" ? "completed" : "locked");
 
             const nodeClasses = [
               "roadmap-node",
@@ -482,7 +492,7 @@ export default function RoadmapPage() {
 
             <div className="side-panel-footer">
               <Link
-                href={`/student/day/${selectedDay.id}`}
+                href={`/student/day/${selectedDay.id}?phaseId=${activePhase.id}`}
                 className="btn btn-primary btn-large w-full"
                 style={{ justifyContent: "center" }}
               >

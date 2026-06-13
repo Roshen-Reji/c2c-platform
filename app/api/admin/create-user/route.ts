@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { adminAuth, adminDb } from "@/lib/firebase-admin";
+import { authErrorResponse, requireUser } from "@/lib/server-auth";
 
 export async function POST(request: NextRequest) {
   try {
+    await requireUser(request, ["admin"]);
     const body = await request.json();
     const { name, email, role } = body;
 
@@ -16,51 +19,50 @@ export async function POST(request: NextRequest) {
     // Generate a temporary password
     const tempPassword = generateSecurePassword();
 
+    const normalizedEmail = String(email).toLowerCase().trim();
+    let userRecord;
     try {
-      const { adminAuth } = await import("@/lib/firebase-admin");
-      const { adminDb } = await import("@/lib/firebase-admin");
-
-      // Create Firebase Auth user
-      const userRecord = await adminAuth.createUser({
-        email: email.toLowerCase(),
+      userRecord = await adminAuth.createUser({
+        email: normalizedEmail,
         password: tempPassword,
-        displayName: name,
-      });
-
-      // Write to appropriate Firestore collection
-      const collectionName = role === "organiser" ? "organisers" : "evaluators";
-      await adminDb.collection(collectionName).doc(userRecord.uid).set({
-        fullName: name.trim(),
-        email: email.toLowerCase().trim(),
-        role,
-        assignedDays: [],
-        assignedStudents: [],
-        createdAt: new Date(),
-        status: "active",
-      });
-
-      return NextResponse.json({
-        success: true,
-        userId: userRecord.uid,
-        tempPassword, // In production, send this via email instead
-        message: `${role} account created successfully`,
+        displayName: String(name).trim(),
       });
     } catch (err) {
-      const error = err as { code?: string; message?: string };
+      const error = err as { code?: string };
       if (error.code === "auth/email-already-exists") {
-        return NextResponse.json({ error: "This email is already registered" }, { status: 409 });
+        return NextResponse.json({ error: "This email is already registered." }, { status: 409 });
       }
-      console.error("Firebase error:", error.message);
-      return NextResponse.json({
-        success: true,
-        userId: `demo_${Date.now()}`,
-        tempPassword,
-        message: `${role} created (demo mode - Firebase not configured)`,
-      });
+      throw err;
     }
+
+    const collectionName = role === "organiser" ? "organisers" : "evaluators";
+    try {
+      await adminDb.collection(collectionName).doc(userRecord.uid).set({
+        fullName: String(name).trim(),
+        email: normalizedEmail,
+        role,
+        assignedDayIds: [],
+        assignedStudents: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        status: "active",
+      });
+    } catch (error) {
+      await adminAuth.deleteUser(userRecord.uid).catch(() => undefined);
+      throw error;
+    }
+
+    return NextResponse.json({
+      success: true,
+      userId: userRecord.uid,
+      tempPassword,
+      message: `${role} account created successfully`,
+    });
   } catch (err) {
+    const authResponse = authErrorResponse(err);
+    if (authResponse) return authResponse;
     console.error("Create user error:", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json({ error: "Could not create the account." }, { status: 500 });
   }
 }
 

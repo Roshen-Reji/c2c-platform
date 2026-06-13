@@ -1,8 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { collection, getDocs, orderBy, query, limit } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { authenticatedJson } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 import { useLeaderboardCache } from "@/lib/useLeaderboardCache";
 import {
@@ -55,28 +54,8 @@ export default function LeaderboardPage() {
   // Fetch function for the cache hook
   const fetchLeaderboard = useCallback(async (): Promise<LeaderboardEntry[]> => {
     try {
-      const studentsRef = collection(db, "students");
-      const q = query(studentsRef, orderBy("totalPoints", "desc"), limit(200));
-      const snapshot = await getDocs(q);
-      if (snapshot.empty) return [];
-
-      const loaded: LeaderboardEntry[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        // Ignore explicitly non-student roles
-        if (data.role && data.role !== "student") return;
-
-        loaded.push({
-          id: doc.id,
-          fullName: data.fullName,
-          batch: data.batch || "-",
-          totalPoints: data.totalPoints || 0,
-          tasksSubmitted: data.tasksSubmitted || 0,
-          tasksApproved: data.tasksApproved || 0,
-          earliestSubmission: data.earliestSubmission?.toMillis?.() || data.earliestSubmission,
-        });
-      });
-      return sortWithTieBreaker(loaded);
+      const result = await authenticatedJson<{ entries: LeaderboardEntry[] }>("/api/leaderboard");
+      return sortWithTieBreaker(result.entries);
     } catch {
       return [];
     }

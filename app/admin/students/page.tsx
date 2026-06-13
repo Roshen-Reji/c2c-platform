@@ -1,8 +1,18 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { collection, getDocs, doc, updateDoc, query, orderBy } from "firebase/firestore";
+import { collection, getDocs, query, orderBy } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { authenticatedJson } from "@/lib/api-client";
+import {
+  IconAlertTriangle,
+  IconCheckCircle,
+  IconClose,
+  IconFileText,
+  IconSearch,
+  IconTrash,
+  IconXCircle,
+} from "@/components/SvgIcons";
 
 interface Student {
   id: string;
@@ -54,13 +64,17 @@ export default function AdminStudentsPage() {
 
   const updateStatus = async (studentId: string, status: "approved" | "rejected") => {
     try {
-      await updateDoc(doc(db, "students", studentId), { status });
-    } catch {
-      console.warn("Firestore update failed");
+      await authenticatedJson("/api/admin/students", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentId, status }),
+      });
+      setStudents((prev) =>
+        prev.map((s) => (s.id === studentId ? { ...s, status } : s))
+      );
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Could not update the student.");
     }
-    setStudents((prev) =>
-      prev.map((s) => (s.id === studentId ? { ...s, status } : s))
-    );
   };
 
   const removeStudent = async (studentId: string) => {
@@ -77,7 +91,7 @@ export default function AdminStudentsPage() {
         const data = await res.json();
         alert(data.error || "Failed to remove student");
       }
-    } catch (err) {
+    } catch {
       alert("Error removing student");
     }
   };
@@ -111,7 +125,7 @@ export default function AdminStudentsPage() {
       {/* Filters */}
       <div style={{ display: "flex", gap: "var(--space-4)", marginBottom: "var(--space-6)", flexWrap: "wrap", alignItems: "center" }}>
         <div className="search-bar" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
-          <span className="search-bar-icon">🔍</span>
+          <span className="search-bar-icon"><IconSearch size={16} /></span>
           <input
             className="input"
             placeholder="Search by name or email..."
@@ -179,7 +193,7 @@ export default function AdminStudentsPage() {
                       style={{ fontSize: "var(--text-xs)" }}
                       onClick={() => setViewScreenshot(s.paymentScreenshot)}
                     >
-                      🖼️ View
+                      <IconFileText size={14} /> View
                     </button>
                   ) : (
                     <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>No image</span>
@@ -194,19 +208,19 @@ export default function AdminStudentsPage() {
                           style={{ padding: "var(--space-1) var(--space-3)", fontSize: "var(--text-xs)" }}
                           onClick={() => updateStatus(s.id, "approved")}
                         >
-                          ✓ Approve
+                          <IconCheckCircle size={13} /> Approve
                         </button>
                         <button
                           className="btn btn-secondary"
                           style={{ padding: "var(--space-1) var(--space-3)", fontSize: "var(--text-xs)", borderColor: "var(--accent-tertiary)", color: "var(--accent-tertiary)" }}
                           onClick={() => updateStatus(s.id, "rejected")}
                         >
-                          ✗ Reject
+                          <IconXCircle size={13} /> Reject
                         </button>
                       </>
                     )}
                     {s.status === "approved" && (
-                      <span className="mono-text" style={{ fontSize: "var(--text-xs)", color: "var(--accent-secondary)" }}>Verified ✓</span>
+                      <span className="mono-text" style={{ fontSize: "var(--text-xs)", color: "var(--accent-secondary)", display: "inline-flex", alignItems: "center", gap: 4 }}><IconCheckCircle size={13} /> Verified</span>
                     )}
                     {s.status === "rejected" && (
                       <button
@@ -222,7 +236,7 @@ export default function AdminStudentsPage() {
                       style={{ fontSize: "var(--text-xs)", color: "var(--accent-tertiary)" }}
                       onClick={() => removeStudent(s.id)}
                     >
-                      🗑️ Remove
+                      <IconTrash size={13} /> Remove
                     </button>
                   </div>
                 </td>
@@ -232,7 +246,7 @@ export default function AdminStudentsPage() {
               <tr>
                 <td colSpan={7}>
                   <div className="empty-state">
-                    <div className="empty-state-icon">🔍</div>
+                    <div className="empty-state-icon"><IconSearch size={34} /></div>
                     <div className="empty-state-title">No students found</div>
                     <div className="empty-state-text">Try adjusting your search or filter.</div>
                   </div>
@@ -249,7 +263,7 @@ export default function AdminStudentsPage() {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3 className="modal-title">Payment Screenshot</h3>
-              <button className="modal-close" onClick={() => setViewScreenshot(null)}>✕</button>
+              <button className="modal-close" onClick={() => setViewScreenshot(null)}><IconClose size={16} /></button>
             </div>
             {viewScreenshot.startsWith("http") ? (
               <>
@@ -275,7 +289,7 @@ export default function AdminStudentsPage() {
               </>
             ) : (
               <div style={{ padding: "var(--space-8)", textAlign: "center", background: "var(--surface-glass)", borderRadius: "var(--radius-lg)" }}>
-                <span style={{ fontSize: "2rem" }}>⚠️</span>
+                <IconAlertTriangle size={34} color="var(--accent-tertiary)" />
                 <p style={{ marginTop: "var(--space-4)", color: "var(--text-secondary)" }}>
                   {viewScreenshot}
                 </p>

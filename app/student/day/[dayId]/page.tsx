@@ -1,803 +1,444 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { useParams } from "next/navigation";
 import dynamic from "next/dynamic";
-import { doc, getDoc, collection, addDoc, onSnapshot, orderBy, query, serverTimestamp } from "firebase/firestore";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
+import { addDoc, collection, onSnapshot, orderBy, query, serverTimestamp } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { authenticatedFetch, authenticatedJson } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
+import type {
+  InterviewSlot,
+  MonitoringEvent,
+  ProgramDay,
+  ProgramQuestion,
+} from "@/lib/program-types";
+import ExamCamera, { type ExamCameraHandle } from "@/components/ExamCamera";
 import {
-  IconBook,
-  IconPencil,
-  IconFileText,
-  IconMic,
-  IconVideo,
-  IconSend,
-  IconExternalLink,
-  IconClock,
+  DayTypeIcon,
   IconAlertTriangle,
+  IconArrowRight,
   IconCheckCircle,
-  IconPlay,
-  IconLiveDot,
   IconChevronLeft,
   IconChevronRight,
+  IconClock,
+  IconExternalLink,
+  IconFileText,
   IconMessageCircle,
-  IconArrowRight,
-  DayTypeIcon,
+  IconPlay,
+  IconSend,
+  IconShield,
+  IconUsers,
+  IconVideo,
 } from "@/components/SvgIcons";
 
 const VideoRecorder = dynamic(() => import("@/components/VideoRecorder"), { ssr: false });
 const JitsiMeeting = dynamic(() => import("@/components/JitsiMeeting"), { ssr: false });
-
-interface DayData {
-  title: string;
-  type: "learning" | "task" | "test" | "interview";
-  description: string;
-  meetLink?: string;
-  meetTime?: string;
-  materials?: { title: string; url: string; type: string }[];
-  youtubeVideos?: string[];
-  taskConfig?: {
-    submissionType: "link" | "file" | "video";
-    instructions: string;
-    maxRecordings?: number;
-    maxPoints: number;
-  };
-  testConfig?: {
-    questions: {
-      type: "mcq" | "text";
-      question: string;
-      options?: string[];
-      points: number;
-    }[];
-    duration: number;
-    monitoringEnabled: boolean;
-  };
-  interviewConfig?: {
-    type: "technical" | "hr";
-    durationMinutes: number;
-  };
-}
 
 interface ChatMessage {
   id: string;
   senderId: string;
   senderName: string;
   text: string;
-  timestamp: Date;
   role: string;
 }
 
-// Fallback data removed. System will now show an error or blank if day is not found.
+interface DayResponse {
+  day: ProgramDay;
+  accessState: "draft" | "invalid" | "upcoming" | "closed" | "open";
+  serverNow: string;
+  interviewSlot: InterviewSlot | null;
+}
 
-export default function DayPage() {
+interface AttemptResponse {
+  attempt: {
+    attemptId: string;
+    deadlineAt: string;
+    answers: Record<string, string>;
+    warningEvents: MonitoringEvent[];
+    questions: ProgramQuestion[];
+  };
+  serverNow: string;
+}
+
+export default function StudentDayPage() {
   const params = useParams();
-  const dayId = params.dayId as string;
+  const searchParams = useSearchParams();
   const { profile } = useAuth();
-
-  const [dayData, setDayData] = useState<DayData | null>(null);
+  const dayId = String(params.dayId);
+  const phaseId = searchParams.get("phaseId") || "";
+  const [day, setDay] = useState<ProgramDay | null>(null);
+  const [accessState, setAccessState] = useState<DayResponse["accessState"]>("invalid");
+  const [slot, setSlot] = useState<InterviewSlot | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  // Chat state
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [chatInput, setChatInput] = useState("");
-  const chatEndRef = useRef<HTMLDivElement>(null);
-
-  // Task submission
-  const [submissionLink, setSubmissionLink] = useState("");
-  const [submissionStatus, setSubmissionStatus] = useState<"idle" | "submitting" | "submitted">("idle");
-  const [videoBlob, setVideoBlob] = useState<Blob | null>(null);
-  const [fileBlob, setFileBlob] = useState<File | null>(null);
-
-  // Interview state
-  const [interviewStarted, setInterviewStarted] = useState(false);
-
-  // Test state
-  const [testStarted, setTestStarted] = useState(false);
-  const [answers, setAnswers] = useState<Record<number, string>>({});
-  const [currentQuestion, setCurrentQuestion] = useState(0);
-  const [tabSwitches, setTabSwitches] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(0);
-
-  // Load day data
   useEffect(() => {
-    async function loadDay() {
-      try {
-        const phases = await getDoc(doc(db, "phases", "phase-1"));
-        if (phases.exists()) {
-          const dayDoc = await getDoc(doc(db, "phases", "phase-1", "days", dayId));
-          if (dayDoc.exists()) {
-            setDayData(dayDoc.data() as DayData);
-            setLoading(false);
-            return;
-          }
-        }
-      } catch (err) {
-        console.warn("Failed to load day:", err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadDay();
-  }, [dayId]);
+    if (!phaseId) return;
+    authenticatedJson<DayResponse>(`/api/days/${phaseId}/${dayId}`)
+      .then((result) => {
+        setDay(result.day);
+        setAccessState(result.accessState);
+        setSlot(result.interviewSlot);
+      })
+      .catch((requestError) => setError(requestError instanceof Error ? requestError.message : "Could not load the day."))
+      .finally(() => setLoading(false));
+  }, [dayId, phaseId]);
 
-  // Chat real-time listener
+  if (!phaseId) return <div className="card empty-state"><IconAlertTriangle size={42} /><div className="empty-state-title">Day link incomplete</div><div className="empty-state-text">Return to the roadmap and open this day again.</div></div>;
+  if (loading) return <div className="day-loading"><div className="spinner" /></div>;
+  if (error || !day) return <div className="card empty-state"><IconAlertTriangle size={42} /><div className="empty-state-title">Day unavailable</div><div className="empty-state-text">{error || "The day could not be found."}</div></div>;
+
+  return (
+    <div>
+      <DayHeader day={day} accessState={accessState} />
+      {accessState !== "open" && <AvailabilityPanel day={day} state={accessState} />}
+      {accessState === "open" && day.type === "learning" && <LearningDay day={day} />}
+      {accessState === "open" && day.type === "task" && <TaskDay day={day} profile={profile} />}
+      {accessState === "open" && day.type === "test" && <TestDay day={day} profile={profile} />}
+      {accessState === "open" && day.type === "interview" && <InterviewDay day={day} slot={slot} displayName={profile?.fullName || "Student"} />}
+    </div>
+  );
+}
+
+function DayHeader({ day, accessState }: { day: ProgramDay; accessState: DayResponse["accessState"] }) {
+  return (
+    <>
+      <div className="portal-header">
+        <div>
+          <h1 className="portal-page-title">{day.title}</h1>
+          <div className="day-heading-meta">
+            <span className={`badge ${day.type === "learning" ? "badge-blue" : day.type === "task" ? "badge-green" : day.type === "test" ? "badge-orange" : "badge-purple"}`}><DayTypeIcon type={day.type} size={12} /> {day.type}</span>
+            <span className={`badge ${accessState === "open" ? "badge-green" : "badge-primary"}`}>{accessState}</span>
+          </div>
+        </div>
+      </div>
+      <div className="card day-overview">
+        <p>{day.description || "No description has been provided."}</p>
+        <div className="program-day-meta">
+          <span><IconClock size={14} /> Starts {formatDate(day.startsAt, day.timezone)}</span>
+          <span><IconClock size={14} /> Ends {formatDate(day.endsAt, day.timezone)}</span>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function AvailabilityPanel({ day, state }: { day: ProgramDay; state: DayResponse["accessState"] }) {
+  const copy =
+    state === "upcoming"
+      ? `This day opens on ${formatDate(day.startsAt, day.timezone)}.`
+      : state === "closed"
+        ? `This day closed on ${formatDate(day.endsAt, day.timezone)}.`
+        : "This day is not currently available.";
+  return <div className="card availability-panel"><IconClock size={42} /><h2>{state === "upcoming" ? "Not open yet" : state === "closed" ? "Day closed" : "Unavailable"}</h2><p>{copy}</p></div>;
+}
+
+function LearningDay({ day }: { day: ProgramDay }) {
+  const { profile } = useAuth();
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [text, setText] = useState("");
+
   useEffect(() => {
-    if (!dayData || dayData.type !== "learning") return;
+    const messagesQuery = query(collection(db, "chat", day.id, "messages"), orderBy("timestamp", "asc"));
+    return onSnapshot(messagesQuery, (snapshot) => {
+      setMessages(snapshot.docs.map((item) => ({ id: item.id, ...(item.data() as Omit<ChatMessage, "id">) })));
+    });
+  }, [day.id]);
+
+  async function send() {
+    if (!profile || !text.trim()) return;
+    await addDoc(collection(db, "chat", day.id, "messages"), {
+      senderId: profile.uid,
+      senderName: profile.fullName,
+      role: profile.role,
+      text: text.trim(),
+      timestamp: serverTimestamp(),
+    });
+    setText("");
+  }
+
+  return (
+    <div className="learning-layout">
+      <div className="day-content-stack">
+        <article className="card session-hero">
+          <div className="session-hero-icon"><IconVideo size={28} /></div>
+          <div><span className="eyebrow">Live learning session</span><h2>{day.learningConfig?.organiserName || "Organiser to be confirmed"}</h2><p>{formatDate(day.startsAt, day.timezone)} to {formatTime(day.endsAt, day.timezone)}</p></div>
+          {day.learningConfig?.meetLink ? <a className="btn btn-primary" href={day.learningConfig.meetLink} target="_blank" rel="noreferrer"><IconExternalLink size={15} /> Join Google Meet</a> : <span className="badge badge-orange">Meet link pending</span>}
+        </article>
+        {day.learningConfig?.youtubeVideos?.map((url) => <div className="card video-resource" key={url}><iframe src={url} title="Learning resource" allowFullScreen /></div>)}
+        {day.learningConfig?.materials && day.learningConfig.materials.length > 0 && <div className="card"><h3 className="section-title"><IconFileText size={17} /> Materials</h3>{day.learningConfig.materials.map((material) => <a className="resource-link" href={material.url} target="_blank" rel="noreferrer" key={material.url}><IconExternalLink size={14} /> {material.title}<span className="badge badge-primary">{material.type}</span></a>)}</div>}
+      </div>
+      <aside className="card chat-panel">
+        <h3><IconMessageCircle size={17} /> Session chat</h3>
+        <div className="chat-messages">{messages.map((message) => <div className={`chat-message ${message.senderId === profile?.uid ? "mine" : ""}`} key={message.id}><strong>{message.senderName}</strong><p>{message.text}</p></div>)}{messages.length === 0 && <div className="question-empty">No messages yet.</div>}</div>
+        <div className="chat-compose"><input className="input" value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void send()} placeholder="Ask a question..." /><button className="btn btn-primary icon-button" onClick={() => void send()}><IconSend size={15} /></button></div>
+      </aside>
+    </div>
+  );
+}
+
+function TaskDay({ day, profile }: { day: ProgramDay; profile: ReturnType<typeof useAuth>["profile"] }) {
+  const config = day.taskConfig!;
+  const [content, setContent] = useState("");
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [video, setVideo] = useState<Blob | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [status, setStatus] = useState<"idle" | "submitting" | "submitted">("idle");
+  const [error, setError] = useState("");
+
+  async function upload(blob: Blob, fileName: string) {
+    if (!profile) throw new Error("Sign in again before uploading.");
+    const form = new FormData();
+    form.append("file", blob, fileName);
+    form.append("userEmail", profile.email);
+    form.append("dayId", day.id);
+    const response = await authenticatedFetch("/api/upload-drive", { method: "POST", body: form });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Upload failed.");
+    return result.url as string;
+  }
+
+  async function submit() {
+    setStatus("submitting");
+    setError("");
     try {
-      const chatRef = collection(db, "chat", dayId, "messages");
-      const q = query(chatRef, orderBy("timestamp", "asc"));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const messages: ChatMessage[] = snapshot.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<ChatMessage, "id">),
-          timestamp: d.data().timestamp?.toDate() || new Date(),
-        }));
-        setChatMessages(messages);
-        setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+      let submissionContent = content.trim();
+      if (config.submissionType === "file" && file) submissionContent = await upload(file, file.name);
+      if (config.submissionType === "video" && video) submissionContent = await upload(video, "task-video.webm");
+      await authenticatedJson("/api/submissions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phaseId: day.phaseId, dayId: day.id, content: submissionContent, answers }),
       });
-      return () => unsubscribe();
-    } catch {
-      // Chat won't work without Firebase
+      setStatus("submitted");
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Could not submit the task.");
+      setStatus("idle");
     }
-  }, [dayData, dayId]);
+  }
 
-  // Tab switch detection for tests
-  useEffect(() => {
-    if (!testStarted) return;
-    const handleVisibility = () => {
-      if (document.hidden) {
-        setTabSwitches((prev) => prev + 1);
-      }
-    };
-    document.addEventListener("visibilitychange", handleVisibility);
-    return () => document.removeEventListener("visibilitychange", handleVisibility);
-  }, [testStarted]);
+  if (status === "submitted") return <div className="card success-state"><IconCheckCircle size={48} /><h2>Task submitted</h2><p>Your volunteer can now review and score it.</p></div>;
 
-  // Test timer
-  useEffect(() => {
-    if (!testStarted || timeLeft <= 0) return;
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [testStarted, timeLeft]);
+  return (
+    <div className="day-content-stack">
+      <div className="card"><h2 className="section-title">Instructions</h2><p className="preserve-lines">{config.instructions || "Complete the task and submit before the day closes."}</p><div className="day-heading-meta"><span className="badge badge-primary">Max {config.maxPoints} points</span><span className="badge badge-blue">{config.submissionType} submission</span></div></div>
+      {config.questions.length > 0 && <QuestionList questions={config.questions} answers={answers} onAnswer={(id, value) => setAnswers((current) => ({ ...current, [id]: value }))} />}
+      <div className="card">
+        <h2 className="section-title">Your submission</h2>
+        {config.submissionType === "link" && <input className="input" value={content} onChange={(event) => setContent(event.target.value)} placeholder="https://..." />}
+        {config.submissionType === "text" && <textarea className="input" rows={8} value={content} onChange={(event) => setContent(event.target.value)} placeholder="Write your response..." />}
+        {config.submissionType === "file" && <input className="input" type="file" onChange={(event) => setFile(event.target.files?.[0] || null)} />}
+        {config.submissionType === "video" && <VideoRecorder onRecordingComplete={setVideo} maxDurationSeconds={300} />}
+        {error && <div className="portal-notice error">{error}</div>}
+        <button className="btn btn-primary btn-large w-full" onClick={() => void submit()} disabled={status === "submitting" || (config.submissionType === "link" && !content.trim()) || (config.submissionType === "text" && !content.trim()) || (config.submissionType === "file" && !file) || (config.submissionType === "video" && !video)}>{status === "submitting" ? "Submitting..." : <><IconCheckCircle size={15} /> Submit Task</>}</button>
+      </div>
+    </div>
+  );
+}
 
-  // Clipboard blocking for tests
+function TestDay({ day, profile }: { day: ProgramDay; profile: ReturnType<typeof useAuth>["profile"] }) {
+  const config = day.testConfig!;
+  const cameraRef = useRef<ExamCameraHandle>(null);
+  const [cameraReady, setCameraReady] = useState(!config.cameraRequired);
+  const [attempt, setAttempt] = useState<AttemptResponse["attempt"] | null>(null);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [warnings, setWarnings] = useState<MonitoringEvent[]>([]);
+  const [questionIndex, setQuestionIndex] = useState(0);
+  const [remaining, setRemaining] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<{ score: number; maxScore: number; status: string } | null>(null);
+  const [error, setError] = useState("");
+  const submittingRef = useRef(false);
+
+  const recordWarning = useCallback((type: MonitoringEvent["type"]) => {
+    setWarnings((current) => [...current, { type, occurredAt: new Date().toISOString(), questionId: attempt?.questions[questionIndex]?.id }]);
+  }, [attempt, questionIndex]);
+
   useEffect(() => {
-    if (!testStarted) return;
-    const block = (e: ClipboardEvent) => e.preventDefault();
-    document.addEventListener("paste", block);
-    document.addEventListener("copy", block);
+    if (!attempt) return;
+    const onVisibility = () => document.hidden && recordWarning("tab_hidden");
+    const onBlur = () => recordWarning("window_blur");
+    const onFullscreen = () => !document.fullscreenElement && recordWarning("fullscreen_exit");
+    const onCopy = (event: ClipboardEvent) => { event.preventDefault(); recordWarning("copy"); };
+    const onPaste = (event: ClipboardEvent) => { event.preventDefault(); recordWarning("paste"); };
+    const onContext = (event: MouseEvent) => { event.preventDefault(); recordWarning("context_menu"); };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("blur", onBlur);
+    document.addEventListener("fullscreenchange", onFullscreen);
+    document.addEventListener("copy", onCopy);
+    document.addEventListener("paste", onPaste);
+    document.addEventListener("contextmenu", onContext);
     return () => {
-      document.removeEventListener("paste", block);
-      document.removeEventListener("copy", block);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("fullscreenchange", onFullscreen);
+      document.removeEventListener("copy", onCopy);
+      document.removeEventListener("paste", onPaste);
+      document.removeEventListener("contextmenu", onContext);
     };
-  }, [testStarted]);
+  }, [attempt, recordWarning]);
 
-  // Right-click blocking for tests
   useEffect(() => {
-    if (!testStarted) return;
-    const blockContext = (e: MouseEvent) => e.preventDefault();
-    document.addEventListener("contextmenu", blockContext);
-    return () => document.removeEventListener("contextmenu", blockContext);
-  }, [testStarted]);
+    if (!attempt) return;
+    function tick() {
+      const seconds = Math.max(0, Math.ceil((new Date(attempt!.deadlineAt).getTime() - Date.now()) / 1000));
+      setRemaining(seconds);
+    }
+    tick();
+    const interval = window.setInterval(tick, 1_000);
+    return () => window.clearInterval(interval);
+  }, [attempt]);
 
-  const sendChatMessage = async () => {
-    if (!chatInput.trim() || !profile) return;
+  useEffect(() => {
+    if (attempt && remaining === 0 && !submittingRef.current) void submit();
+    // submit intentionally reads the latest attempt state when the timer reaches zero.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attempt, remaining]);
+
+  useEffect(() => {
+    if (!attempt) return;
+    const timeout = window.setTimeout(() => {
+      void authenticatedJson(`/api/exams/${day.phaseId}/${day.id}/attempt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "autosave", answers, warningEvents: warnings }),
+      }).catch(() => undefined);
+    }, 900);
+    return () => window.clearTimeout(timeout);
+  }, [answers, attempt, day.id, day.phaseId, warnings]);
+
+  async function start() {
+    if (config.cameraRequired && !cameraReady) return;
+    setError("");
     try {
-      const chatRef = collection(db, "chat", dayId, "messages");
-      await addDoc(chatRef, {
-        senderId: profile.uid,
-        senderName: profile.fullName,
-        text: chatInput.trim(),
-        timestamp: serverTimestamp(),
-        role: profile.role,
+      if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen().catch(() => undefined);
+      const response = await authenticatedJson<AttemptResponse>(`/api/exams/${day.phaseId}/${day.id}/attempt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "start" }),
       });
-      setChatInput("");
-    } catch {
-      console.warn("Chat not available without Firebase config");
+      setAttempt(response.attempt);
+      setAnswers(response.attempt.answers || {});
+      setWarnings(response.attempt.warningEvents || []);
+    } catch (startError) {
+      setError(startError instanceof Error ? startError.message : "Could not start the test.");
     }
-  };
+  }
 
-  const handleTaskSubmit = async () => {
-    if (!profile) return;
-    const isVideo = dayData?.taskConfig?.submissionType === "video";
-    const isFile = dayData?.taskConfig?.submissionType === "file";
-    const isLink = dayData?.taskConfig?.submissionType === "link";
-    
-    if (isLink && !submissionLink.trim()) return;
-    if (isVideo && !videoBlob) return;
-    if (isFile && !fileBlob) return;
+  async function uploadRecording(blob: Blob | null) {
+    if (!blob || !profile) return "";
+    const form = new FormData();
+    form.append("file", blob, "exam-monitoring.webm");
+    form.append("userEmail", profile.email);
+    form.append("dayId", day.id);
+    const response = await authenticatedFetch("/api/upload-drive", { method: "POST", body: form });
+    const resultData = await response.json();
+    if (!response.ok) throw new Error(resultData.error || "Could not upload the monitoring video.");
+    return resultData.url as string;
+  }
 
-    setSubmissionStatus("submitting");
-    let contentUrl = submissionLink.trim();
-
-    if ((isVideo && videoBlob) || (isFile && fileBlob)) {
-      try {
-        const formData = new FormData();
-        if (isVideo && videoBlob) {
-          formData.append("file", videoBlob, "video.webm");
-        } else if (isFile && fileBlob) {
-          formData.append("file", fileBlob, fileBlob.name);
-        }
-        formData.append("userEmail", profile.email);
-        formData.append("dayId", dayId);
-
-        const res = await fetch("/api/upload-drive", {
-          method: "POST",
-          body: formData,
-        });
-
-        const data = await res.json();
-        if (data.success) {
-          contentUrl = data.url;
-        } else {
-          throw new Error(data.error);
-        }
-      } catch (err) {
-        console.warn("Upload to Drive failed:", err);
-        contentUrl = `[${isVideo ? "Video" : "File"} recorded - upload failed]`;
-      }
-    }
-
+  async function submit() {
+    if (!attempt || submittingRef.current) return;
+    submittingRef.current = true;
+    setSubmitting(true);
     try {
-      await addDoc(collection(db, "submissions"), {
-        studentId: profile.uid,
-        dayId,
-        phaseId: "phase-1",
-        type: isVideo ? "video" : (isFile ? "file" : "task"),
-        content: contentUrl,
-        submittedAt: serverTimestamp(),
-        points: 0,
-        status: "pending",
+      const recording = await cameraRef.current?.stop();
+      const cameraRecordingUrl = await uploadRecording(recording || null);
+      const response = await authenticatedJson<{ score: number; maxScore: number; status: string }>(`/api/exams/${day.phaseId}/${day.id}/attempt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "submit", answers, warningEvents: warnings, cameraRecordingUrl }),
       });
-    } catch {
-      console.warn("Submission saved locally only - Firebase not configured");
+      if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined);
+      setResult(response);
+      setAttempt(null);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Could not submit the test.");
+      submittingRef.current = false;
+      setSubmitting(false);
     }
-    setSubmissionStatus("submitted");
-  };
+  }
 
-  const handleTestSubmit = async () => {
-    if (!profile || !dayData?.testConfig) return;
-    try {
-      await addDoc(collection(db, "submissions"), {
-        studentId: profile.uid,
-        dayId,
-        phaseId: "phase-1",
-        type: "test",
-        answers,
-        tabSwitches,
-        submittedAt: serverTimestamp(),
-        points: 0,
-        status: "pending",
-        totalQuestions: dayData.testConfig.questions.length,
-      });
-    } catch {
-      console.warn("Test submission saved locally - Firebase not configured");
-    }
-    setTestStarted(false);
-    alert("Test submitted successfully!");
-  };
+  if (result) return <div className="card success-state"><IconCheckCircle size={52} /><h2>Test submitted</h2><p>{result.status === "graded" ? `MCQ score: ${result.score} / ${result.maxScore}` : `MCQ score: ${result.score} / ${result.maxScore}. Written answers are awaiting review.`}</p><span className="badge badge-orange">{warnings.length} monitoring events recorded</span></div>;
 
-  if (loading) {
+  if (!attempt) {
     return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "50vh" }}>
-        <div className="spinner" style={{ width: 32, height: 32 }} />
+      <div className="exam-launch-layout">
+        <div className="card exam-brief">
+          <IconShield size={48} color="var(--accent-primary)" />
+          <h2>Exam readiness check</h2>
+          <div className="exam-facts"><span><IconClock size={16} /> {config.durationMinutes} minutes</span><span><IconFileText size={16} /> {config.questions.length} questions</span><span><IconAlertTriangle size={16} /> Warning limit: {config.warningLimit}</span></div>
+          <ul><li>The timer is enforced by the server and cannot exceed the day closing time.</li><li>Leaving fullscreen, switching tabs, copy/paste, right-click, and window blur are logged.</li><li>Monitoring events are evidence for review, not automatic proof of misconduct.</li></ul>
+          {error && <div className="portal-notice error">{error}</div>}
+          <button className="btn btn-primary btn-large" disabled={!cameraReady} onClick={() => void start()}><IconPlay size={16} /> Start Test</button>
+        </div>
+        <div className="card"><ExamCamera ref={cameraRef} active={Boolean(attempt)} required={config.cameraRequired} onReadyChange={setCameraReady} /></div>
       </div>
     );
   }
 
-  if (!dayData) return <div>Day not found</div>;
-
-  const getBadgeClass = () => {
-    switch (dayData.type) {
-      case "learning": return "badge-blue";
-      case "task": return "badge-green";
-      case "test": return "badge-orange";
-      case "interview": return "badge-purple";
-      default: return "badge-primary";
-    }
-  };
-
-  const getTypeLabel = () => {
-    switch (dayData.type) {
-      case "learning": return "Learning";
-      case "task": return "Task";
-      case "test": return "Test";
-      case "interview": return "Interview";
-      default: return dayData.type;
-    }
-  };
-
+  const question = attempt.questions[questionIndex];
+  const answered = Object.values(answers).filter((value) => value.trim()).length;
   return (
-    <div>
-      <div className="portal-header">
-        <div>
-          <h1 className="portal-page-title">{dayData.title}</h1>
-          <p className="portal-page-subtitle">
-            <span className={`badge ${getBadgeClass()}`} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              <DayTypeIcon type={dayData.type} size={12} />
-              {getTypeLabel()}
-            </span>
-          </p>
+    <div className="exam-shell">
+      <aside className="card exam-sidebar">
+        <ExamCamera ref={cameraRef} active required={config.cameraRequired} onReadyChange={setCameraReady} />
+        <div className={`exam-timer ${remaining < 60 ? "danger" : ""}`}><IconClock size={20} /> {formatCountdown(remaining)}</div>
+        <div className="exam-progress"><strong>{answered} / {attempt.questions.length}</strong><span>answered</span></div>
+        <div className="exam-warning-count"><IconAlertTriangle size={16} /><strong>{warnings.length}</strong><span>events</span></div>
+        <div className="question-palette">{attempt.questions.map((item, index) => <button className={`${index === questionIndex ? "active" : ""} ${answers[item.id] ? "answered" : ""}`} key={item.id} onClick={() => setQuestionIndex(index)}>{index + 1}</button>)}</div>
+      </aside>
+      <main className="card exam-question-card">
+        {warnings.length >= config.warningLimit && <div className="portal-notice error"><IconAlertTriangle size={16} /> You have reached the configured warning threshold. Continue carefully; all events are included with your submission.</div>}
+        <div className="exam-question-heading"><span>Question {questionIndex + 1} of {attempt.questions.length}</span><span>{question.points} points</span></div>
+        <h2>{question.prompt}</h2>
+        <QuestionInput question={question} value={answers[question.id] || ""} onChange={(value) => setAnswers((current) => ({ ...current, [question.id]: value }))} />
+        <div className="exam-navigation">
+          <button className="btn btn-secondary" disabled={questionIndex === 0 || !config.allowBackNavigation} onClick={() => setQuestionIndex((index) => index - 1)}><IconChevronLeft size={14} /> Previous</button>
+          {questionIndex < attempt.questions.length - 1 ? <button className="btn btn-primary" onClick={() => setQuestionIndex((index) => index + 1)}>Next <IconChevronRight size={14} /></button> : <button className="btn btn-primary" disabled={submitting} onClick={() => void submit()}>{submitting ? "Submitting..." : <><IconCheckCircle size={14} /> Submit Test</>}</button>}
         </div>
-      </div>
-
-      <div className="card" style={{ marginBottom: "var(--space-6)" }}>
-        <p style={{ color: "var(--text-secondary)", lineHeight: 1.7 }}>{dayData.description}</p>
-      </div>
-
-      {/* ===== Learning Day ===== */}
-      {dayData.type === "learning" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: "var(--space-6)" }}>
-          <div>
-            {/* Meet Link */}
-            {dayData.meetLink && (
-              <div className="card" style={{ marginBottom: "var(--space-6)" }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <div>
-                    <h3 style={{ fontFamily: "var(--font-heading)", marginBottom: "var(--space-1)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                      <IconVideo size={18} color="var(--accent-secondary)" />
-                      Live Session
-                    </h3>
-                    <p className="mono-text" style={{ fontSize: "var(--text-xs)", color: "var(--text-tertiary)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                      <IconClock size={12} />
-                      {dayData.meetTime}
-                    </p>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
-                    <IconLiveDot size={16} color="var(--accent-secondary)" />
-                    <a
-                      href={dayData.meetLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="btn btn-primary"
-                      style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}
-                    >
-                      <IconExternalLink size={14} />
-                      Join Meeting
-                    </a>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* YouTube Videos */}
-            {dayData.youtubeVideos && dayData.youtubeVideos.length > 0 && (
-              <div className="card" style={{ marginBottom: "var(--space-6)" }}>
-                <h3 style={{ fontFamily: "var(--font-heading)", marginBottom: "var(--space-4)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                  <IconPlay size={18} color="var(--accent-tertiary)" />
-                  Video Resources
-                </h3>
-                {dayData.youtubeVideos.map((url, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      position: "relative",
-                      paddingBottom: "56.25%",
-                      height: 0,
-                      borderRadius: "var(--radius-lg)",
-                      overflow: "hidden",
-                      marginBottom: "var(--space-4)",
-                    }}
-                  >
-                    <iframe
-                      src={url}
-                      style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" }}
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                      allowFullScreen
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Materials */}
-            {dayData.materials && dayData.materials.length > 0 && (
-              <div className="card">
-                <h3 style={{ fontFamily: "var(--font-heading)", marginBottom: "var(--space-4)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                  <IconFileText size={18} color="var(--accent-blue)" />
-                  Study Materials
-                </h3>
-                {dayData.materials.map((mat, i) => (
-                  <a
-                    key={i}
-                    href={mat.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "var(--space-3)",
-                      padding: "var(--space-3)",
-                      borderRadius: "var(--radius-md)",
-                      transition: "background 0.2s",
-                      textDecoration: "none",
-                      color: "var(--text-secondary)",
-                    }}
-                    onMouseOver={(e) => (e.currentTarget.style.background = "var(--surface-glass-hover)")}
-                    onMouseOut={(e) => (e.currentTarget.style.background = "transparent")}
-                  >
-                    <IconFileText size={16} />
-                    <span>{mat.title}</span>
-                    <span className="badge badge-primary" style={{ marginLeft: "auto", fontSize: "10px" }}>
-                      {mat.type}
-                    </span>
-                  </a>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Chat Panel */}
-          <div
-            className="card"
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              maxHeight: "600px",
-              position: "sticky",
-              top: "var(--space-4)",
-            }}
-          >
-            <h3
-              style={{
-                fontFamily: "var(--font-heading)",
-                fontSize: "var(--text-base)",
-                marginBottom: "var(--space-4)",
-                paddingBottom: "var(--space-3)",
-                borderBottom: "1px solid var(--border-subtle)",
-                display: "flex",
-                alignItems: "center",
-                gap: "var(--space-2)",
-              }}
-            >
-              <IconMessageCircle size={18} color="var(--accent-blue)" />
-              Session Chat
-            </h3>
-            <div style={{ flex: 1, overflowY: "auto", marginBottom: "var(--space-4)" }}>
-              {chatMessages.length === 0 ? (
-                <div style={{ textAlign: "center", padding: "var(--space-8)", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>
-                  No messages yet. Start the conversation!
-                </div>
-              ) : (
-                chatMessages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    style={{
-                      marginBottom: "var(--space-3)",
-                      padding: "var(--space-2) var(--space-3)",
-                      borderRadius: "var(--radius-md)",
-                      background: msg.senderId === profile?.uid ? "rgba(232, 255, 71, 0.05)" : "transparent",
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: 2 }}>
-                      <span style={{ fontWeight: 600, fontSize: "var(--text-xs)" }}>{msg.senderName}</span>
-                      <span className={`badge ${msg.role === "organiser" ? "badge-purple" : "badge-primary"}`} style={{ fontSize: "9px", padding: "1px 6px" }}>
-                        {msg.role}
-                      </span>
-                    </div>
-                    <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>{msg.text}</p>
-                  </div>
-                ))
-              )}
-              <div ref={chatEndRef} />
-            </div>
-            <div style={{ display: "flex", gap: "var(--space-2)" }}>
-              <input
-                className="input"
-                placeholder="Type a message..."
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && sendChatMessage()}
-                style={{ fontSize: "var(--text-sm)" }}
-              />
-              <button className="btn btn-primary" onClick={sendChatMessage} style={{ flexShrink: 0 }}>
-                <IconSend size={14} />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ===== Task Day ===== */}
-      {dayData.type === "task" && dayData.taskConfig && (
-        <div>
-          <div className="card" style={{ marginBottom: "var(--space-6)" }}>
-            <h3 style={{ fontFamily: "var(--font-heading)", marginBottom: "var(--space-3)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-              <IconPencil size={18} color="var(--accent-secondary)" />
-              Task Instructions
-            </h3>
-            <p style={{ color: "var(--text-secondary)", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
-              {dayData.taskConfig.instructions}
-            </p>
-            <div style={{ marginTop: "var(--space-4)", display: "flex", gap: "var(--space-3)" }}>
-              <span className="badge badge-primary">Max Points: {dayData.taskConfig.maxPoints}</span>
-              <span className="badge badge-blue">Type: {dayData.taskConfig.submissionType}</span>
-              {dayData.taskConfig.maxRecordings && (
-                <span className="badge badge-orange">Max {dayData.taskConfig.maxRecordings} recordings</span>
-              )}
-            </div>
-          </div>
-
-          <div className="card">
-            <h3 style={{ fontFamily: "var(--font-heading)", marginBottom: "var(--space-4)" }}>
-              Submit Your Work
-            </h3>
-
-            {submissionStatus === "submitted" ? (
-              <div style={{ textAlign: "center", padding: "var(--space-8)" }}>
-                <div style={{ marginBottom: "var(--space-3)", display: "flex", justifyContent: "center" }}>
-                  <IconCheckCircle size={48} color="var(--accent-secondary)" />
-                </div>
-                <h4 style={{ fontFamily: "var(--font-heading)", marginBottom: "var(--space-2)" }}>
-                  Submitted Successfully!
-                </h4>
-                <p style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)" }}>
-                  Your submission is pending evaluation.
-                </p>
-              </div>
-            ) : (
-              <>
-                {dayData.taskConfig.submissionType === "link" && (
-                  <div className="input-group">
-                    <label className="input-label">Submission Link</label>
-                    <input
-                      className="input"
-                      placeholder="Paste your submission link here..."
-                      value={submissionLink}
-                      onChange={(e) => setSubmissionLink(e.target.value)}
-                    />
-                  </div>
-                )}
-
-                {dayData.taskConfig.submissionType === "video" && (
-                  <div style={{ marginBottom: "var(--space-6)" }}>
-                    <VideoRecorder
-                      onRecordingComplete={(blob: Blob) => setVideoBlob(blob)}
-                      maxDurationSeconds={300}
-                    />
-                  </div>
-                )}
-
-                {dayData.taskConfig.submissionType === "file" && (
-                  <div className="input-group">
-                    <label className="input-label">Upload File (PDF, Word, etc.)</label>
-                    <input
-                      type="file"
-                      className="input"
-                      style={{ padding: "var(--space-2)" }}
-                      accept=".pdf,.doc,.docx,.ppt,.pptx"
-                      onChange={(e) => {
-                        if (e.target.files && e.target.files.length > 0) {
-                          setFileBlob(e.target.files[0]);
-                        }
-                      }}
-                    />
-                  </div>
-                )}
-
-                <button
-                  className="btn btn-primary btn-large w-full"
-                  onClick={handleTaskSubmit}
-                  disabled={
-                    submissionStatus === "submitting" ||
-                    (dayData.taskConfig.submissionType === "link" && !submissionLink.trim()) ||
-                    (dayData.taskConfig.submissionType === "video" && !videoBlob) ||
-                    (dayData.taskConfig.submissionType === "file" && !fileBlob)
-                  }
-                >
-                  {submissionStatus === "submitting" ? (
-                    <>
-                      <span className="spinner" />
-                      {dayData.taskConfig.submissionType === "video" || dayData.taskConfig.submissionType === "file" ? "Uploading..." : "Submitting..."}
-                    </>
-                  ) : (
-                    <>
-                      <IconCheckCircle size={16} />
-                      {dayData.taskConfig.submissionType === "video" ? "Upload & Submit Video" : dayData.taskConfig.submissionType === "file" ? "Upload & Submit File" : "Submit Task"}
-                    </>
-                  )}
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ===== Mock Interview Day ===== */}
-      {dayData.type === ("interview" as string) && dayData.interviewConfig && (
-        <div>
-          {!interviewStarted ? (
-            <div className="card" style={{ textAlign: "center", padding: "var(--space-12)" }}>
-              <div style={{ marginBottom: "var(--space-4)", display: "flex", justifyContent: "center" }}>
-                <IconMic size={64} color="var(--accent-purple)" />
-              </div>
-              <h3 style={{ fontFamily: "var(--font-heading)", fontSize: "var(--text-2xl)", marginBottom: "var(--space-4)" }}>
-                {dayData.interviewConfig.type === "technical" ? "Technical" : "HR"} Mock Interview
-              </h3>
-              <p style={{ color: "var(--text-secondary)", marginBottom: "var(--space-2)" }}>
-                Duration: <strong>{dayData.interviewConfig.durationMinutes} minutes</strong>
-              </p>
-              <p style={{ color: "var(--text-secondary)", marginBottom: "var(--space-6)", maxWidth: 500, margin: "0 auto var(--space-6)" }}>
-                You will be connected to a Jitsi video call with an evaluator. The session will simulate a real placement interview.
-              </p>
-              <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)", alignItems: "center" }}>
-                <button className="btn btn-primary btn-large" onClick={() => setInterviewStarted(true)} style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}>
-                  <IconVideo size={18} />
-                  Join Interview Room
-                </button>
-                <p className="mono-text" style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                  <IconAlertTriangle size={12} />
-                  Ensure camera & mic permissions are enabled
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div style={{ height: "70vh" }}>
-              <JitsiMeeting
-                roomName={`c2c-interview-${dayId}-${profile?.uid || "demo"}`}
-                displayName={profile?.fullName || "Student"}
-                onClose={() => setInterviewStarted(false)}
-              />
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ===== Test Day ===== */}
-      {dayData.type === "test" && dayData.testConfig && (
-        <div>
-          {!testStarted ? (
-            <div className="card" style={{ textAlign: "center", padding: "var(--space-12)" }}>
-              <h3 style={{ fontFamily: "var(--font-heading)", fontSize: "var(--text-2xl)", marginBottom: "var(--space-4)" }}>
-                Ready to Begin?
-              </h3>
-              <p style={{ color: "var(--text-secondary)", marginBottom: "var(--space-2)", display: "flex", alignItems: "center", justifyContent: "center", gap: "var(--space-2)" }}>
-                <IconClock size={16} />
-                Duration: <strong>{dayData.testConfig.duration} minutes</strong>
-              </p>
-              <p style={{ color: "var(--text-secondary)", marginBottom: "var(--space-2)" }}>
-                Questions: <strong>{dayData.testConfig.questions.length}</strong>
-              </p>
-              {dayData.testConfig.monitoringEnabled && (
-                <p style={{ color: "var(--accent-tertiary)", fontSize: "var(--text-xs)", marginBottom: "var(--space-6)", display: "flex", alignItems: "center", justifyContent: "center", gap: "var(--space-2)" }}>
-                  <IconAlertTriangle size={14} />
-                  Tab switching, copy-paste, and right-click will be monitored
-                </p>
-              )}
-              <button
-                className="btn btn-primary btn-large"
-                onClick={() => {
-                  setTestStarted(true);
-                  setTimeLeft(dayData.testConfig!.duration * 60);
-                }}
-              >
-                <IconPlay size={16} />
-                Start Test
-              </button>
-            </div>
-          ) : (
-            <div>
-              {/* Timer & Warnings */}
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: "var(--space-6)",
-                  padding: "var(--space-3) var(--space-5)",
-                  background: "var(--bg-card)",
-                  borderRadius: "var(--radius-lg)",
-                  border: "1px solid var(--border-subtle)",
-                }}
-              >
-                <span className="mono-text" style={{ color: timeLeft < 60 ? "var(--accent-tertiary)" : "var(--text-secondary)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                  <IconClock size={16} />
-                  {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, "0")}
-                </span>
-                <span className="mono-text" style={{ fontSize: "var(--text-xs)", color: "var(--text-tertiary)" }}>
-                  Q {currentQuestion + 1}/{dayData.testConfig.questions.length}
-                </span>
-                {tabSwitches > 0 && (
-                  <span className="badge badge-orange" style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                    <IconAlertTriangle size={12} />
-                    Tab switches: {tabSwitches}
-                  </span>
-                )}
-              </div>
-
-              {/* Question */}
-              <div className="card" style={{ marginBottom: "var(--space-6)" }}>
-                <div className="mono-text" style={{ fontSize: "var(--text-xs)", color: "var(--accent-primary)", marginBottom: "var(--space-3)" }}>
-                  Question {currentQuestion + 1} — {dayData.testConfig.questions[currentQuestion].points} points
-                </div>
-                <h3 style={{ fontFamily: "var(--font-heading)", fontSize: "var(--text-lg)", marginBottom: "var(--space-6)" }}>
-                  {dayData.testConfig.questions[currentQuestion].question}
-                </h3>
-
-                {dayData.testConfig.questions[currentQuestion].type === "mcq" &&
-                  dayData.testConfig.questions[currentQuestion].options?.map((opt, i) => (
-                    <label
-                      key={i}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "var(--space-3)",
-                        padding: "var(--space-3) var(--space-4)",
-                        borderRadius: "var(--radius-md)",
-                        border: `1px solid ${answers[currentQuestion] === opt ? "var(--accent-primary)" : "var(--border-subtle)"}`,
-                        marginBottom: "var(--space-2)",
-                        cursor: "pointer",
-                        background: answers[currentQuestion] === opt ? "rgba(232, 255, 71, 0.05)" : "transparent",
-                        transition: "all 0.2s",
-                      }}
-                    >
-                      <input
-                        type="radio"
-                        name={`q-${currentQuestion}`}
-                        checked={answers[currentQuestion] === opt}
-                        onChange={() => setAnswers((prev) => ({ ...prev, [currentQuestion]: opt }))}
-                        style={{ accentColor: "var(--accent-primary)" }}
-                      />
-                      <span style={{ fontSize: "var(--text-sm)" }}>{opt}</span>
-                    </label>
-                  ))}
-
-                {dayData.testConfig.questions[currentQuestion].type === "text" && (
-                  <textarea
-                    className="input"
-                    rows={4}
-                    placeholder="Type your answer here..."
-                    value={answers[currentQuestion] || ""}
-                    onChange={(e) => setAnswers((prev) => ({ ...prev, [currentQuestion]: e.target.value }))}
-                    style={{ resize: "vertical" }}
-                  />
-                )}
-              </div>
-
-              {/* Navigation */}
-              <div style={{ display: "flex", gap: "var(--space-4)", justifyContent: "space-between" }}>
-                <button
-                  className="btn btn-secondary"
-                  disabled={currentQuestion === 0}
-                  onClick={() => setCurrentQuestion((p) => p - 1)}
-                  style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}
-                >
-                  <IconChevronLeft size={14} />
-                  Previous
-                </button>
-                {currentQuestion < dayData.testConfig.questions.length - 1 ? (
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => setCurrentQuestion((p) => p + 1)}
-                    style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}
-                  >
-                    Next
-                    <IconChevronRight size={14} />
-                  </button>
-                ) : (
-                  <button
-                    className="btn btn-primary"
-                    onClick={handleTestSubmit}
-                    style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}
-                  >
-                    <IconCheckCircle size={14} />
-                    Submit Test
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      </main>
     </div>
   );
+}
+
+function InterviewDay({ day, slot, displayName }: { day: ProgramDay; slot: InterviewSlot | null; displayName: string }) {
+  const [joined, setJoined] = useState(false);
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    const update = () => setNow(Date.now());
+    const initial = window.setTimeout(update, 0);
+    const interval = window.setInterval(update, 30_000);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(interval);
+    };
+  }, []);
+  if (!slot) return <div className="card availability-panel"><IconUsers size={46} /><h2>Interview slot not assigned</h2><p>Your volunteer and meeting time will appear here after the admin schedules them.</p></div>;
+  const joinable = now >= new Date(slot.startsAt).getTime() - 10 * 60_000 && now <= new Date(slot.endsAt).getTime() + 15 * 60_000;
+  if (joined) return <div className="meeting-page-shell"><JitsiMeeting roomName={slot.roomName} displayName={displayName} onClose={() => setJoined(false)} /></div>;
+  return <div className="card interview-card"><div className="interview-icon"><IconVideo size={34} /></div><span className="eyebrow">{day.interviewConfig?.interviewType || "Mixed"} interview</span><h2>Your one-to-one meeting</h2><p>Your assigned volunteer is <strong>{slot.volunteerName}</strong>.</p><div className="interview-schedule"><span><IconClock size={16} /> {formatDate(slot.startsAt, slot.timezone)}</span><span><IconArrowRight size={15} /> {formatTime(slot.endsAt, slot.timezone)}</span></div><button className="btn btn-primary btn-large" disabled={!joinable} onClick={() => setJoined(true)}><IconVideo size={16} /> {joinable ? "Join Interview Room" : "Room opens 10 minutes before"}</button></div>;
+}
+
+function QuestionList({ questions, answers, onAnswer }: { questions: ProgramQuestion[]; answers: Record<string, string>; onAnswer: (id: string, value: string) => void }) {
+  return <div className="day-content-stack">{questions.map((question, index) => <div className="card" key={question.id}><div className="exam-question-heading"><span>Question {index + 1}</span><span>{question.points} points</span></div><h3 className="task-question-title">{question.prompt}</h3><QuestionInput question={question} value={answers[question.id] || ""} onChange={(value) => onAnswer(question.id, value)} /></div>)}</div>;
+}
+
+function QuestionInput({ question, value, onChange }: { question: ProgramQuestion; value: string; onChange: (value: string) => void }) {
+  if (question.type === "text") return <textarea className="input exam-text-answer" rows={8} value={value} onChange={(event) => onChange(event.target.value)} placeholder="Write your answer..." />;
+  return <div className="exam-options">{question.options?.map((option, index) => <label className={value === String(index) ? "selected" : ""} key={`${question.id}-${index}`}><input type="radio" name={question.id} checked={value === String(index)} onChange={() => onChange(String(index))} /><span className="exam-option-letter">{String.fromCharCode(65 + index)}</span><span>{option}</span></label>)}</div>;
+}
+
+function formatDate(value: string, timeZone: string) {
+  return new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: timeZone || "Asia/Kolkata" }).format(new Date(value));
+}
+
+function formatTime(value: string, timeZone: string) {
+  return new Intl.DateTimeFormat("en-IN", { timeStyle: "short", timeZone: timeZone || "Asia/Kolkata" }).format(new Date(value));
+}
+
+function formatCountdown(seconds: number) {
+  const minutes = Math.floor(seconds / 60);
+  return `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }

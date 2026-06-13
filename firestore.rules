@@ -1,0 +1,108 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function hasProfile(collectionName) {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/$(collectionName)/$(request.auth.uid));
+    }
+
+    function isAdmin() {
+      return hasProfile("admins");
+    }
+
+    function isOrganiser() {
+      return hasProfile("organisers");
+    }
+
+    function isEvaluator() {
+      return hasProfile("evaluators");
+    }
+
+    function isStudent() {
+      return hasProfile("students");
+    }
+
+    match /phases/{phaseId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+
+      match /days/{dayId} {
+        allow read: if signedIn();
+        allow write: if isAdmin();
+      }
+    }
+
+    match /students/{studentId} {
+      allow read: if isAdmin() || isEvaluator() || request.auth.uid == studentId;
+      allow create: if request.auth.uid == studentId;
+      allow update: if isAdmin() ||
+        (request.auth.uid == studentId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            "fullName",
+            "batch",
+            "year",
+            "phone",
+            "linkedin",
+            "github",
+            "recentNotifications",
+            "updatedAt"
+          ]));
+      allow delete: if isAdmin();
+    }
+
+    match /admins/{userId} {
+      allow read: if request.auth.uid == userId || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    match /organisers/{userId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /evaluators/{userId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /chat/{dayId}/messages/{messageId} {
+      allow read: if signedIn();
+      allow create: if signedIn() &&
+        request.resource.data.senderId == request.auth.uid &&
+        request.resource.data.text is string &&
+        request.resource.data.text.size() <= 2000;
+      allow update, delete: if isAdmin() || resource.data.senderId == request.auth.uid;
+    }
+
+    match /submissions/{submissionId} {
+      allow read: if isAdmin() ||
+        (isStudent() && resource.data.studentId == request.auth.uid) ||
+        isEvaluator() ||
+        isOrganiser();
+      allow write: if false;
+    }
+
+    match /testAttempts/{attemptId} {
+      allow read: if isAdmin() ||
+        (isStudent() && resource.data.studentId == request.auth.uid) ||
+        isEvaluator();
+      allow write: if false;
+    }
+
+    match /interviewSlots/{slotId} {
+      allow read: if isAdmin() ||
+        (isStudent() && resource.data.studentId == request.auth.uid) ||
+        (isEvaluator() && resource.data.volunteerId == request.auth.uid);
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

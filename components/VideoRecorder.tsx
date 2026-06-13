@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, useCallback, useEffect } from "react";
+import { IconCamera, IconCheckCircle, IconLiveDot, IconVideo } from "@/components/SvgIcons";
 
 interface VideoRecorderProps {
   onRecordingComplete: (blob: Blob) => void;
@@ -160,7 +161,7 @@ export default function VideoRecorder({
               color: "var(--text-tertiary)",
             }}
           >
-            <span style={{ fontSize: 48 }}>🎥</span>
+            <IconVideo size={46} />
             <p style={{ fontSize: "var(--text-sm)" }}>Click below to open camera</p>
           </div>
         ) : (
@@ -235,12 +236,12 @@ export default function VideoRecorder({
       <div style={{ display: "flex", gap: "var(--space-3)" }}>
         {status === "idle" && (
           <button className="btn btn-secondary w-full" onClick={startCamera}>
-            📷 Open Camera
+            <IconCamera size={15} /> Open Camera
           </button>
         )}
         {status === "preview" && (
           <button className="btn btn-primary w-full" onClick={startRecording}>
-            🔴 Start Recording
+            <IconLiveDot size={15} /> Start Recording
           </button>
         )}
         {status === "recording" && (
@@ -249,16 +250,16 @@ export default function VideoRecorder({
             onClick={stopRecording}
             style={{ background: "var(--accent-tertiary)", borderColor: "var(--accent-tertiary)" }}
           >
-            ⏹ Stop Recording
+            Stop Recording
           </button>
         )}
         {status === "recorded" && (
           <>
             <button className="btn btn-secondary" onClick={resetRecording}>
-              🔄 Re-record
+              Re-record
             </button>
             <button className="btn btn-primary" style={{ flex: 1 }} disabled>
-              ✅ Video Captured ({formatTime(timeElapsed)})
+              <IconCheckCircle size={15} /> Video Captured ({formatTime(timeElapsed)})
             </button>
           </>
         )}

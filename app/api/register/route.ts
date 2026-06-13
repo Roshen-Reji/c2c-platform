@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { adminAuth, adminDb } from "@/lib/firebase-admin";
+import { appendSheetRecord } from "@/lib/google-sheets";
 
 // Note: Firebase Admin and Google Sheets are imported dynamically
 // to allow the app to run even without credentials configured
@@ -13,6 +15,7 @@ export async function POST(request: NextRequest) {
     const email = formData.get("email") as string;
     const password = formData.get("password") as string;
     const googleUid = formData.get("googleUid") as string;
+    const googleIdToken = formData.get("googleIdToken") as string;
     const screenshot = formData.get("screenshot") as File | null;
 
     // Validate required fields
@@ -61,16 +64,29 @@ export async function POST(request: NextRequest) {
 
     // Try to create Firebase Auth user
     let userId = googleUid;
+    let createdPasswordUser = false;
 
-    if (!googleUid) {
+    if (googleUid) {
+      if (!googleIdToken) {
+        return NextResponse.json({ error: "Google sign-in could not be verified." }, { status: 401 });
+      }
       try {
-        const { adminAuth } = await import("@/lib/firebase-admin");
+        const decoded = await adminAuth.verifyIdToken(googleIdToken);
+        if (decoded.uid !== googleUid || decoded.email?.toLowerCase() !== email.toLowerCase().trim()) {
+          return NextResponse.json({ error: "Google account details do not match." }, { status: 401 });
+        }
+      } catch {
+        return NextResponse.json({ error: "Google sign-in has expired. Please sign in again." }, { status: 401 });
+      }
+    } else {
+      try {
         const userRecord = await adminAuth.createUser({
           email: email.toLowerCase(),
           password: password,
           displayName: fullName,
         });
         userId = userRecord.uid;
+        createdPasswordUser = true;
       } catch (authErr: any) {
         if (authErr.code === 'auth/email-already-exists') {
           return NextResponse.json(
@@ -78,14 +94,12 @@ export async function POST(request: NextRequest) {
             { status: 400 }
           );
         }
-        console.warn("Firebase Auth user creation failed (credentials may not be configured):", authErr);
-        userId = `temp_${Date.now()}`;
+        console.error("Firebase Auth user creation failed:", authErr);
+        return NextResponse.json({ error: "Could not create your account." }, { status: 500 });
       }
     }
 
-    // Try to save to Firestore
     try {
-      const { adminDb } = await import("@/lib/firebase-admin");
       await adminDb.collection("students").doc(userId).set({
         fullName: fullName.trim(),
         email: email.toLowerCase().trim(),
@@ -103,24 +117,23 @@ export async function POST(request: NextRequest) {
         daysCompleted: 0,
       });
     } catch (dbErr) {
-      console.warn("Firestore write failed (credentials may not be configured):", dbErr);
+      if (createdPasswordUser) {
+        await adminAuth.deleteUser(userId).catch(() => undefined);
+      }
+      console.error("Firestore registration write failed:", dbErr);
+      return NextResponse.json({ error: "Could not save your registration." }, { status: 500 });
     }
 
-    // Try to append to Google Sheet
-    try {
-      const { appendToSheet } = await import("@/lib/google-sheets");
-      await appendToSheet([
+    void appendSheetRecord("registrations", [
+        userId,
         fullName.trim(),
+        email.toLowerCase().trim(),
         batch,
         year,
-        email.toLowerCase().trim(),
         screenshotUrl,
         timestamp,
         "pending",
-      ]);
-    } catch (sheetsErr) {
-      console.warn("Google Sheets append failed (credentials may not be configured):", sheetsErr);
-    }
+      ]).catch((sheetsErr) => console.warn("Google Sheets registration sync failed:", sheetsErr));
 
     return NextResponse.json({
       success: true,
