@@ -2,15 +2,29 @@ import { google } from "googleapis";
 import { Readable } from "stream";
 
 function getAuth() {
-  const key = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
-  if (!key) {
-    throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY environment variable is not set");
+  if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
+    return new google.auth.GoogleAuth({
+      credentials: {
+        client_email: process.env.GOOGLE_CLIENT_EMAIL,
+        private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      },
+      scopes: ["https://www.googleapis.com/auth/drive"],
+    });
   }
 
-  return new google.auth.GoogleAuth({
-    credentials: JSON.parse(key),
-    scopes: ["https://www.googleapis.com/auth/drive"],
-  });
+  const key = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+  if (!key) {
+    throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY or GOOGLE_CLIENT_EMAIL/PRIVATE_KEY environment variables are not set");
+  }
+
+  try {
+    return new google.auth.GoogleAuth({
+      credentials: JSON.parse(key),
+      scopes: ["https://www.googleapis.com/auth/drive"],
+    });
+  } catch (error) {
+    throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY is not valid JSON.");
+  }
 }
 
 // Lazy initialization of the drive client

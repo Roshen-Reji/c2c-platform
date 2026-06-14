@@ -12,12 +12,21 @@ import { getFirestore } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 
 function readServiceAccount(): ServiceAccount | undefined {
+  if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
+    return {
+      clientEmail: process.env.GOOGLE_CLIENT_EMAIL,
+      privateKey: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    } as ServiceAccount;
+  }
+  
   const key = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
   if (!key) return undefined;
   try {
     return JSON.parse(key) as ServiceAccount;
   } catch (error) {
-    throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY is not valid JSON.", { cause: error });
+    console.warn("GOOGLE_SERVICE_ACCOUNT_KEY is not valid JSON. Falling back to applicationDefault().");
+    return undefined;
   }
 }
 
