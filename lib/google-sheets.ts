@@ -31,7 +31,7 @@ function getAuth() {
 const SHEETS = {
   registrations: {
     title: "Registrations",
-    headers: ["Student ID", "Full Name", "Email", "Phone", "Branch", "Year", "Payment Proof", "Registered At", "Status"],
+    headers: ["Student ID", "Full Name", "Email", "Phone", "Branch", "Year", "Payment Proof", "Registered At", "Status", "IEEE Member", "IEEE Number", "Amount Paid"],
   },
   preRegistrations: {
     title: "Pre-Registrations",

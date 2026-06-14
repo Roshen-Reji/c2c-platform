@@ -188,19 +188,23 @@ export async function POST(
     });
     await batch.commit();
 
-    void appendSheetRecord("examAttempts", [
-      attemptId,
-      user.uid,
-      user.fullName,
-      phaseId,
-      dayId,
-      attempt.data()?.startedAt || "",
-      submittedAt,
-      score,
-      maxScore,
-      warningEvents.length,
-      hasTextAnswers ? "Pending text review" : "Graded",
-    ]).catch((error) => console.warn("Exam Sheets sync failed:", error));
+    try {
+      await appendSheetRecord("examAttempts", [
+        attemptId,
+        user.uid,
+        user.fullName,
+        phaseId,
+        dayId,
+        attempt.data()?.startedAt || "",
+        submittedAt,
+        score,
+        maxScore,
+        warningEvents.length,
+        hasTextAnswers ? "Pending text review" : "Graded",
+      ]);
+    } catch (error) {
+      console.warn("Exam Sheets sync failed:", error);
+    }
 
     return NextResponse.json({
       success: true,

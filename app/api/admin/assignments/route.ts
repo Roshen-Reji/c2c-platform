@@ -41,16 +41,20 @@ export async function POST(request: NextRequest) {
       });
       await batch.commit();
 
-      void appendSheetRecord("assignments", [
-        "Organiser to learning day",
-        organiserId,
-        organiserSnap.data()?.fullName || "",
-        `${phaseId}/${dayId}`,
-        daySnap.data()?.title || "",
-        daySnap.data()?.startsAt || "",
-        daySnap.data()?.endsAt || "",
-        new Date().toISOString(),
-      ]).catch((error) => console.warn("Sheets assignment sync failed:", error));
+      try {
+        await appendSheetRecord("assignments", [
+          "Organiser to learning day",
+          organiserId,
+          organiserSnap.data()?.fullName || "",
+          `${phaseId}/${dayId}`,
+          daySnap.data()?.title || "",
+          daySnap.data()?.startsAt || "",
+          daySnap.data()?.endsAt || "",
+          new Date().toISOString(),
+        ]);
+      } catch (error) {
+        console.warn("Sheets assignment sync failed:", error);
+      }
 
       return NextResponse.json({ success: true });
     }
@@ -112,16 +116,20 @@ export async function POST(request: NextRequest) {
       }
 
       await batch.commit();
-      void appendSheetRecord("assignments", [
-        "Volunteer to student",
-        volunteerId,
-        volunteerSnap.data()?.fullName || "",
-        studentId,
-        studentSnap.data()?.fullName || "",
-        body.startsAt || "",
-        body.endsAt || "",
-        new Date().toISOString(),
-      ]).catch((error) => console.warn("Sheets assignment sync failed:", error));
+      try {
+        await appendSheetRecord("assignments", [
+          "Volunteer to student",
+          volunteerId,
+          volunteerSnap.data()?.fullName || "",
+          studentId,
+          studentSnap.data()?.fullName || "",
+          body.startsAt || "",
+          body.endsAt || "",
+          new Date().toISOString(),
+        ]);
+      } catch (error) {
+        console.warn("Sheets assignment sync failed:", error);
+      }
 
       return NextResponse.json({ success: true });
     }

@@ -65,19 +65,23 @@ export async function POST(request: NextRequest) {
     });
     await batch.commit();
 
-    void appendSheetRecord("submissions", [
-      submissionRef.id,
-      user.uid,
-      user.fullName,
-      body.phaseId,
-      body.dayId,
-      day.title,
-      day.taskConfig.submissionType,
-      submittedAt,
-      "Pending review",
-      0,
-      content,
-    ]).catch((error) => console.warn("Submission Sheets sync failed:", error));
+    try {
+      await appendSheetRecord("submissions", [
+        submissionRef.id,
+        user.uid,
+        user.fullName,
+        body.phaseId,
+        body.dayId,
+        day.title,
+        day.taskConfig.submissionType,
+        submittedAt,
+        "Pending review",
+        0,
+        content,
+      ]);
+    } catch (error) {
+      console.warn("Submission Sheets sync failed:", error);
+    }
 
     return NextResponse.json({ success: true, submissionId: submissionRef.id });
   } catch (error) {
