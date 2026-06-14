@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { collection, getDocs, query, orderBy } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { authenticatedJson } from "@/lib/api-client";
+import { authenticatedJson, authenticatedFetch } from "@/lib/api-client";
 import {
   IconAlertTriangle,
   IconCheckCircle,
@@ -80,7 +80,7 @@ export default function AdminStudentsPage() {
   const removeStudent = async (studentId: string) => {
     if (!confirm("Are you sure you want to completely remove this student? This action cannot be undone.")) return;
     try {
-      const res = await fetch(`/api/admin/delete-user?uid=${studentId}&role=student`, { method: "DELETE" });
+      const res = await authenticatedFetch(`/api/admin/delete-user?uid=${studentId}&role=student`, { method: "DELETE" });
       if (res.ok) {
         const data = await res.json();
         setStudents((prev) => prev.filter((s) => s.id !== studentId));

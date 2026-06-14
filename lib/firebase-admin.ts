@@ -33,6 +33,12 @@ const adminApp =
 
 export const adminAuth = getAuth(adminApp);
 export const adminDb = getFirestore(adminApp);
-adminDb.settings({ ignoreUndefinedProperties: true });
+try {
+  adminDb.settings({ ignoreUndefinedProperties: true });
+} catch (error: any) {
+  if (!error.message?.includes("already been initialized")) {
+    console.error("Firestore settings error:", error);
+  }
+}
 export const adminStorage = getStorage(adminApp);
 export default adminApp;
