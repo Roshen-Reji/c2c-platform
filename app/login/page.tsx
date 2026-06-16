@@ -15,6 +15,8 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [step, setStep] = useState(1);
+  const [isSetup, setIsSetup] = useState(false);
 
   const processLogin = async (userCredential: UserCredential) => {
     const uid = userCredential.user.uid;
@@ -66,27 +68,77 @@ export default function LoginPage() {
     }
   };
 
+  const handleEmailSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim()) return;
+    setError("");
+    setLoading(true);
+
+    try {
+      const res = await fetch("/api/check-user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim().toLowerCase() })
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to check email");
+      }
+
+      if (!data.exists) {
+        setError("Account not found. Please register first.");
+        setLoading(false);
+        return;
+      }
+
+      setIsSetup(!data.hasPassword);
+      setStep(2);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "An error occurred");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
 
     try {
+      if (isSetup) {
+        const setupRes = await fetch("/api/setup-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email.trim().toLowerCase(), password })
+        });
+        const setupData = await setupRes.json();
+        if (!setupRes.ok) {
+          throw new Error(setupData.error || "Failed to set up password");
+        }
+      }
+
       const userCredential = await signInWithEmailAndPassword(
         auth,
         email.trim().toLowerCase(),
         password
       );
       await processLogin(userCredential);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Login error:", err);
-      const code = (err as { code?: string }).code;
-      if (code === "auth/user-not-found" || code === "auth/wrong-password" || code === "auth/invalid-credential") {
-        setError("Invalid email or password.");
-      } else if (code === "auth/too-many-requests") {
-        setError("Too many failed attempts. Please try again later.");
+      if (err.message && !err.code) {
+        setError(err.message);
       } else {
-        setError("Something went wrong. Please try again.");
+        const code = err.code;
+        if (code === "auth/user-not-found" || code === "auth/wrong-password" || code === "auth/invalid-credential") {
+          setError("Invalid email or password.");
+        } else if (code === "auth/too-many-requests") {
+          setError("Too many failed attempts. Please try again later.");
+        } else {
+          setError("Something went wrong. Please try again.");
+        }
       }
       setLoading(false);
     }
@@ -144,58 +196,109 @@ export default function LoginPage() {
             <div style={{ flex: 1, height: '1px', background: 'var(--border-subtle)' }}></div>
           </div>
 
-          <form onSubmit={handleLogin} className="login-form">
-            <div className="input-group">
-              <label className="input-label" htmlFor="login-email">
-                Email
-              </label>
-              <input
-                id="login-email"
-                type="email"
-                className="input"
-                placeholder="your.email@college.edu"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </div>
-
-            <div className="input-group">
-              <label className="input-label" htmlFor="login-password">
-                Password
-              </label>
-              <input
-                id="login-password"
-                type="password"
-                className="input"
-                placeholder="Enter your password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </div>
-
-            {error && (
-              <div className="login-error" id="login-error">
-                {error}
+          {step === 1 ? (
+            <form onSubmit={handleEmailSubmit} className="login-form">
+              <div className="input-group">
+                <label className="input-label" htmlFor="login-email">
+                  Email
+                </label>
+                <input
+                  id="login-email"
+                  type="email"
+                  className="input"
+                  placeholder="your.email@college.edu"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                />
               </div>
-            )}
 
-            <button
-              type="submit"
-              className="btn btn-primary btn-large w-full"
-              disabled={loading}
-              id="login-submit-btn"
-            >
-              {loading ? (
-                <>
-                  <span className="spinner" /> Signing in...
-                </>
-              ) : (
-                "Sign In"
+              {error && (
+                <div className="login-error" id="login-error">
+                  {error}
+                </div>
               )}
-            </button>
-          </form>
+
+              <button
+                type="submit"
+                className="btn btn-primary btn-large w-full"
+                disabled={loading}
+                id="login-continue-btn"
+              >
+                {loading ? (
+                  <>
+                    <span className="spinner" /> Checking...
+                  </>
+                ) : (
+                  "Continue"
+                )}
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleLogin} className="login-form">
+              <div className="input-group">
+                <label className="input-label" htmlFor="login-email-display">
+                  Email
+                </label>
+                <input
+                  id="login-email-display"
+                  type="email"
+                  className="input"
+                  value={email}
+                  disabled
+                  style={{ opacity: 0.7, cursor: "not-allowed" }}
+                />
+                <button
+                  type="button"
+                  onClick={() => { setStep(1); setPassword(""); setError(""); }}
+                  style={{ background: "none", border: "none", color: "var(--accent-secondary)", fontSize: "var(--text-xs)", marginTop: "var(--space-1)", cursor: "pointer", textDecoration: "underline", textAlign: "left", padding: 0 }}
+                >
+                  Change Email
+                </button>
+              </div>
+
+              <div className="input-group">
+                <label className="input-label" htmlFor="login-password">
+                  {isSetup ? "Create Password" : "Password"}
+                </label>
+                <input
+                  id="login-password"
+                  type="password"
+                  className="input"
+                  placeholder={isSetup ? "Create a secure password" : "Enter your password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                />
+                {isSetup && (
+                  <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginTop: "var(--space-1)" }}>
+                    This is your first time logging in. Please set a password for your account.
+                  </div>
+                )}
+              </div>
+
+              {error && (
+                <div className="login-error" id="login-error">
+                  {error}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="btn btn-primary btn-large w-full"
+                disabled={loading}
+                id="login-submit-btn"
+              >
+                {loading ? (
+                  <>
+                    <span className="spinner" /> {isSetup ? "Setting up..." : "Signing in..."}
+                  </>
+                ) : (
+                  isSetup ? "Set Password & Sign In" : "Sign In"
+                )}
+              </button>
+            </form>
+          )}
 
           <div className="login-footer">
           </div>
